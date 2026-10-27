@@ -222,6 +222,7 @@ class PrinterResponse(PrinterBase):
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
+    custom_image_filename: str | None = None  # user-uploaded printer picture
     plate_detection_enabled: bool = False
     plate_detection_roi: PlateDetectionROI | None = None
     created_at: datetime
@@ -253,6 +254,7 @@ class PrinterResponse(PrinterBase):
             "external_camera_enabled": effective_camera.enabled,
             "external_camera_snapshot_url": effective_camera.snapshot_url,
             "camera_rotation": printer.camera_rotation,
+            "custom_image_filename": getattr(printer, "custom_image_filename", None),
             "is_active": printer.is_active,
             "nozzle_count": printer.nozzle_count,
             "print_hours_offset": printer.print_hours_offset,

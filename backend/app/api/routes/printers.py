@@ -1,15 +1,17 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import tempfile
+import uuid
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -620,10 +622,123 @@ async def delete_printer(
         )
         await db.execute(sql_delete(PrinterMaintenance).where(PrinterMaintenance.printer_id == printer_id))
 
+    _remove_custom_image_file(printer)
+
     await db.delete(printer)
     await db.commit()
 
     return {"status": "deleted", "archives_deleted": delete_archives}
+
+
+# ============ Custom printer image ============
+
+# A user-uploaded picture replaces the model image on cards and dialogs, so
+# several printers of the same model can be told apart visually.
+CUSTOM_IMAGE_CONTENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+CUSTOM_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def get_printer_images_dir() -> Path:
+    """Directory holding user-uploaded printer pictures (inside the data volume)."""
+    return Path(settings.archive_dir) / "printer_images"
+
+
+def _remove_custom_image_file(printer: Printer) -> None:
+    """Best-effort delete of a printer's custom image file from disk."""
+    if not printer.custom_image_filename:
+        return
+    path = get_printer_images_dir() / printer.custom_image_filename
+    if path.exists():
+        try:
+            os.remove(path)
+        except OSError as e:
+            logger.warning("Failed to delete printer image %s: %s", path, e)
+
+
+@router.post("/{printer_id}/image", response_model=PrinterResponse)
+async def upload_printer_image(
+    printer_id: int,
+    file: UploadFile = File(...),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload (or replace) the custom picture shown for this printer."""
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in CUSTOM_IMAGE_CONTENT_TYPES:
+        raise HTTPException(400, f"Image must be one of {sorted(CUSTOM_IMAGE_CONTENT_TYPES)}")
+
+    content = await file.read()
+    if len(content) > CUSTOM_IMAGE_MAX_BYTES:
+        raise HTTPException(400, "Image is too large (max 10 MB)")
+
+    images_dir = get_printer_images_dir()
+    images_dir.mkdir(parents=True, exist_ok=True)
+    _remove_custom_image_file(printer)
+
+    # Unique name per upload so browsers never show a stale cached picture.
+    filename = f"printer_{printer_id}_{uuid.uuid4().hex}{ext}"
+    try:
+        (images_dir / filename).write_bytes(content)
+    except OSError as e:
+        logger.error("Failed to save printer image: %s", e)
+        raise HTTPException(500, "Failed to save image")
+
+    printer.custom_image_filename = filename
+    await db.commit()
+    await db.refresh(printer)
+    return printer
+
+
+@router.get("/{printer_id}/image")
+async def get_printer_image(
+    printer_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = RequireCameraStreamTokenIfAuthEnabled,
+):
+    """Serve the printer's custom picture (accepts ?token= like other <img> routes)."""
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    if not printer.custom_image_filename:
+        raise HTTPException(404, "No custom image set")
+
+    file_path = get_printer_images_dir() / printer.custom_image_filename
+    if not file_path.exists():
+        raise HTTPException(404, "Image file not found")
+
+    ext = os.path.splitext(printer.custom_image_filename)[1].lower()
+    return FileResponse(file_path, media_type=CUSTOM_IMAGE_CONTENT_TYPES.get(ext, "application/octet-stream"))
+
+
+@router.delete("/{printer_id}/image", response_model=PrinterResponse)
+async def delete_printer_image(
+    printer_id: int,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove the custom picture; the printer falls back to its model image."""
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+
+    _remove_custom_image_file(printer)
+    printer.custom_image_filename = None
+    await db.commit()
+    await db.refresh(printer)
+    return printer
 
 
 @router.get("/{printer_id}/status", response_model=PrinterStatus)

@@ -122,7 +122,7 @@ import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveLoadedFilamentInfo, resolveTrayFillLevel } from '../utils/amsHelpers';
-import { getDefaultPrinterImage, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
+import { getDefaultPrinterImage, getPrinterDisplayImage, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
 import { appAssetPath } from '../utils/assetPaths';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
@@ -546,6 +546,94 @@ function PrinterModelImagePreview({ model }: { model: string | null | undefined 
         <div className="text-sm font-medium text-white truncate">{label}</div>
         <div className="text-xs text-bambu-gray">
           {t('printers.modal.modelImagePreview', 'Preview image changes with the selected model.')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Per-printer picture: lets several printers of the same model be told apart.
+// Uploads/removals apply immediately (independent of the dialog's Save button).
+function PrinterCustomImageControl({ printer }: { printer: Printer }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [customImage, setCustomImage] = useState<string | null>(printer.custom_image_filename ?? null);
+  const [busy, setBusy] = useState(false);
+
+  const imageSrc = getPrinterDisplayImage({ id: printer.id, model: printer.model, custom_image_filename: customImage });
+
+  const applyResult = (updated: Printer) => {
+    setCustomImage(updated.custom_image_filename ?? null);
+    queryClient.invalidateQueries({ queryKey: ['printers'] });
+  };
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      applyResult(await api.uploadPrinterImage(printer.id, file));
+      showToast(t('printers.modal.customImageSaved', 'Printer image updated'), 'success');
+    } catch (error) {
+      showToast((error as Error).message || t('printers.modal.customImageFailed', 'Failed to update printer image'), 'error');
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemove = async () => {
+    setBusy(true);
+    try {
+      applyResult(await api.deletePrinterImage(printer.id));
+    } catch (error) {
+      showToast((error as Error).message || t('printers.modal.customImageFailed', 'Failed to update printer image'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.customImage', 'Printer image')}</label>
+      <div className="rounded-lg border border-bambu-dark-tertiary bg-bambu-dark/60 p-3 flex items-center gap-3">
+        <img
+          src={imageSrc}
+          alt={printer.name}
+          className="w-20 h-20 object-contain rounded bg-bambu-dark flex-shrink-0"
+          onError={(event) => {
+            const fallback = getDefaultPrinterImage();
+            if (event.currentTarget.getAttribute('src') !== fallback) {
+              event.currentTarget.src = fallback;
+            }
+          }}
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="text-xs text-bambu-gray">
+            {customImage
+              ? t('printers.modal.customImageActive', 'A custom image is used for this printer.')
+              : t('printers.modal.customImageHelp', 'Upload your own picture (JPG, PNG, GIF, WebP) to tell printers of the same model apart.')}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp"
+              className="hidden"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+            />
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+              {customImage
+                ? t('printers.modal.customImageReplace', 'Replace image')
+                : t('printers.modal.customImageUpload', 'Upload image')}
+            </Button>
+            {customImage && (
+              <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={handleRemove}>
+                {t('printers.modal.customImageRemove', 'Use model image')}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -3281,7 +3369,7 @@ function PrinterCard({
             <div className="flex items-center gap-3 min-w-0 flex-1">
               {/* Printer Model Image */}
               <img
-                src={getPrinterImage(printer.model)}
+                src={getPrinterDisplayImage(printer)}
                 alt={printer.model || t('common.printer')}
                 className={`object-contain rounded-lg bg-bambu-dark flex-shrink-0 ${getImageSize()}`}
                 onError={(event) => {
@@ -7946,6 +8034,7 @@ function EditPrinterModal({
               />
               <PrinterModelImagePreview model={form.model} />
             </div>
+            <PrinterCustomImageControl printer={printer} />
             <div>
               <label className="block text-sm text-bambu-gray mb-1">Location / Group</label>
               <input

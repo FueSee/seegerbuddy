@@ -3213,3 +3213,76 @@ class TestConfigureAmsSlotPersistsKProfile:
         assert response.status_code == 200
         # MQTT was indeed called
         mock_client.extrusion_cali_sel.assert_called_once()
+
+
+class TestPrinterCustomImage:
+    """Per-printer custom picture: upload, serve, replace, remove."""
+
+    @pytest.fixture(autouse=True)
+    def _images_dir(self, tmp_path, monkeypatch):
+        from backend.app.core.config import settings
+
+        monkeypatch.setattr(settings, "archive_dir", tmp_path)
+        self.images_dir = tmp_path / "printer_images"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_upload_serve_replace_and_remove(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory(name="Printer A")
+
+        response = await async_client.post(
+            f"/api/v1/printers/{printer.id}/image",
+            files={"file": ("a.png", b"\x89PNG first", "image/png")},
+        )
+        assert response.status_code == 200
+        first = response.json()["custom_image_filename"]
+        assert first and first.endswith(".png")
+
+        listed = (await async_client.get("/api/v1/printers/")).json()
+        assert listed[0]["custom_image_filename"] == first
+
+        served = await async_client.get(f"/api/v1/printers/{printer.id}/image")
+        assert served.status_code == 200
+        assert served.content == b"\x89PNG first"
+        assert served.headers["content-type"] == "image/png"
+
+        # Replacing deletes the old file and stores a new name (cache busting).
+        response = await async_client.post(
+            f"/api/v1/printers/{printer.id}/image",
+            files={"file": ("b.jpg", b"jpeg second", "image/jpeg")},
+        )
+        second = response.json()["custom_image_filename"]
+        assert second != first
+        assert not (self.images_dir / first).exists()
+        assert (self.images_dir / second).exists()
+
+        response = await async_client.delete(f"/api/v1/printers/{printer.id}/image")
+        assert response.status_code == 200
+        assert response.json()["custom_image_filename"] is None
+        assert not (self.images_dir / second).exists()
+        assert (await async_client.get(f"/api/v1/printers/{printer.id}/image")).status_code == 404
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_rejects_non_image_extension(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory(name="Printer B")
+        response = await async_client.post(
+            f"/api/v1/printers/{printer.id}/image",
+            files={"file": ("evil.svg", b"<svg/>", "image/svg+xml")},
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleting_printer_removes_image_file(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory(name="Printer C")
+        response = await async_client.post(
+            f"/api/v1/printers/{printer.id}/image",
+            files={"file": ("c.webp", b"webp", "image/webp")},
+        )
+        filename = response.json()["custom_image_filename"]
+        assert (self.images_dir / filename).exists()
+
+        with patch("backend.app.api.routes.printers.printer_manager"):
+            assert (await async_client.delete(f"/api/v1/printers/{printer.id}")).status_code == 200
+        assert not (self.images_dir / filename).exists()

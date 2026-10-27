@@ -295,6 +295,7 @@ export interface Printer {
   external_camera_enabled: boolean;
   external_camera_snapshot_url: string | null;  // optional single-frame override (#1177)
   camera_rotation: number;  // 0, 90, 180, 270 degrees
+  custom_image_filename?: string | null;  // user-uploaded printer picture
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
   created_at: string;
@@ -3640,6 +3641,31 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  // Custom per-printer picture (replaces the model image).
+  // <img> can't send Authorization headers, so the URL carries the stream token;
+  // the filename changes on every upload, which busts the browser cache.
+  getPrinterCustomImageUrl: (id: number, filename: string) =>
+    withStreamToken(`${API_BASE}/printers/${id}/image?v=${encodeURIComponent(filename)}`),
+  uploadPrinterImage: async (id: number, file: File): Promise<Printer> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(`${API_BASE}/printers/${id}/image`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+  deletePrinterImage: (id: number) =>
+    request<Printer>(`/printers/${id}/image`, { method: 'DELETE' }),
   updatePrinter: (id: number, data: Partial<PrinterCreate>) =>
     request<Printer>(`/printers/${id}`, {
       method: 'PATCH',

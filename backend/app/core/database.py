@@ -1901,6 +1901,9 @@ async def run_migrations(conn):
     # Migration: Configure backend recovery for active offline printers.
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN reconnect_interval_seconds INTEGER DEFAULT 30 NOT NULL")
 
+    # Migration: Add custom_image_filename column to printers (per-printer picture)
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN custom_image_filename VARCHAR(255)")
+
     # Migration: Add REST/Webhook smart plug fields
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN rest_on_url VARCHAR(500)")
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN rest_on_body TEXT")
