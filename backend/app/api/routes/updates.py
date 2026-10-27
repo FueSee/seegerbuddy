@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
-from backend.app.core.config import APP_VERSION, GITHUB_REPO, settings
+from backend.app.core.config import APP_VERSION, FORK_REPO, GITHUB_REPO, IN_APP_UPDATES_ENABLED, settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.settings import Settings
@@ -409,8 +409,15 @@ async def get_version():
         "display_version": display_version,
         "source_ref": source_ref,
         "source_ref_short": source_ref_short,
-        "repo": GITHUB_REPO,
+        "repo": FORK_REPO,
     }
+
+
+# Shown instead of upstream releases while in-app updates are disabled.
+FORK_UPDATE_MESSAGE = (
+    f"In-app updates are disabled for this build ({FORK_REPO}). "
+    "The administrator updates the server with: git pull && docker compose up -d --build"
+)
 
 
 @router.get("/check")
@@ -420,6 +427,15 @@ async def check_for_updates(
 ):
     """Check GitHub for available updates."""
     global _update_status
+
+    if not IN_APP_UPDATES_ENABLED:
+        return {
+            "update_available": False,
+            "current_version": APP_VERSION,
+            "latest_version": None,
+            "in_app_updates_disabled": True,
+            "message": FORK_UPDATE_MESSAGE,
+        }
 
     # Respect the check_updates setting
     result = await db.execute(select(Settings).where(Settings.key == "check_updates"))
@@ -620,6 +636,8 @@ async def _discover_target_release(db: AsyncSession) -> str | None:
 
 async def _perform_update(target_ref: str):
     """Perform the actual update using git fetch and reset.
+
+    Never reached while IN_APP_UPDATES_ENABLED is False (guarded in /apply).
 
     `target_ref` is whatever git ref the caller wants to land on — typically
     a release tag like `v0.2.4b1` resolved by `_discover_target_release`,
@@ -858,6 +876,8 @@ async def start_self_update(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
 ):
     """Trigger the optional Docker updater sidecar."""
+    if not IN_APP_UPDATES_ENABLED:
+        raise HTTPException(status_code=400, detail=FORK_UPDATE_MESSAGE)
     if not settings.self_update_enabled:
         raise HTTPException(status_code=400, detail="Self-update is not enabled")
     if not settings.updater_url or not settings.updater_token:
@@ -888,6 +908,8 @@ async def get_self_update_status(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SYSTEM_READ),
 ):
     """Report whether the optional updater sidecar is configured and healthy."""
+    if not IN_APP_UPDATES_ENABLED:
+        return {"enabled": False, "available": False, "reason": FORK_UPDATE_MESSAGE, "mode": "updater-sidecar"}
     if not settings.self_update_enabled:
         return {"enabled": False, "available": False, "reason": "Self-update is not enabled", "mode": "updater-sidecar"}
     if not settings.updater_url or not settings.updater_token:
@@ -957,6 +979,9 @@ async def apply_update(
 ):
     """Apply available update (git pull + rebuild)."""
     global _update_status
+
+    if not IN_APP_UPDATES_ENABLED:
+        return {"success": False, "message": FORK_UPDATE_MESSAGE}
 
     if _update_status["status"] in ["downloading", "installing"]:
         return {

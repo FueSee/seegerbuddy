@@ -19,7 +19,8 @@ import { Button } from './Button';
 import { BugReportBubble } from './BugReportBubble';
 import { appAssetPath } from '../utils/assetPaths';
 
-const SOURCE_CODE_URL = 'https://github.com/vmhomelab/Printbuddy';
+// Seeger fork: link users to the source they are actually running (AGPL).
+const SOURCE_CODE_URL = 'https://github.com/FueSee/seegerbuddy';
 
 interface NavItem {
   id: string;

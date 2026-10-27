@@ -9,6 +9,12 @@ from pydantic_settings import BaseSettings
 APP_VERSION = "0.2.5.3"
 GITHUB_REPO = "vmhomelab/Printbuddy"
 
+# Seeger fork. In-app updates are disabled: they would install the upstream
+# version, which lacks our changes. The administrator updates the server from
+# the fork instead (git pull && docker compose up -d --build).
+FORK_REPO = "FueSee/seegerbuddy"
+IN_APP_UPDATES_ENABLED = False
+
 # App directory - where the application is installed (for static files)
 _app_dir = Path(__file__).resolve().parent.parent.parent.parent
 

@@ -2610,6 +2610,10 @@ export function SettingsPage() {
                   <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
                     {t('settings.failedToCheckUpdates', { error: updateCheck.error })}
                   </div>
+                ) : updateCheck?.in_app_updates_disabled ? (
+                  <p className="mt-2 text-sm text-bambu-gray">
+                    {t('settings.inAppUpdatesDisabled', 'In-app updates are turned off for this Seeger version. The administrator updates the server directly from our fork.')}
+                  </p>
                 ) : updateCheck && !updateCheck.update_available ? (
                   <p className="mt-2 text-sm text-bambu-gray">
                     {t('settings.latestVersionRunning')}

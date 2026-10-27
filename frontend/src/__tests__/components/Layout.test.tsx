@@ -37,7 +37,7 @@ describe('Layout', () => {
           display_version: '0.1.6 (abc1234)',
           source_ref: 'abc1234567890abc1234567890abc1234567890ab',
           source_ref_short: 'abc1234',
-          repo: 'vmhomelab/Printbuddy',
+          repo: 'FueSee/seegerbuddy',
         });
       }),
       http.get('/api/v1/settings/', () => {
@@ -183,7 +183,7 @@ describe('Layout', () => {
       render(<Layout />);
 
       const sourceLink = await screen.findByRole('link', { name: /source code/i });
-      expect(sourceLink).toHaveAttribute('href', 'https://github.com/vmhomelab/Printbuddy');
+      expect(sourceLink).toHaveAttribute('href', 'https://github.com/FueSee/seegerbuddy');
     });
   });
 

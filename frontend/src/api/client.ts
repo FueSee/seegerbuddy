@@ -2927,6 +2927,7 @@ export interface UpdateCheckResult {
   is_docker?: boolean;
   is_ha_addon?: boolean;
   update_method?: 'docker' | 'git' | 'ha_addon';
+  in_app_updates_disabled?: boolean;  // Seeger fork: updates are deployed by the admin
 }
 
 export interface UpdateStatus {

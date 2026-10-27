@@ -8,6 +8,17 @@ from httpx import AsyncClient
 
 
 class TestUpdatesAPI:
+    """Upstream update behaviour, exercised with in-app updates switched on.
+
+    The Seeger fork ships with IN_APP_UPDATES_ENABLED = False (see
+    TestForkUpdatesDisabled); these tests keep the upstream code paths covered.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enable_in_app_updates(self):
+        with patch("backend.app.api.routes.updates.IN_APP_UPDATES_ENABLED", True):
+            yield
+
     @pytest.mark.asyncio
     async def test_get_version(self, async_client: AsyncClient):
         with patch.dict("os.environ", {"PRINTBUDDY_REF": "1a593e7b9440ce692cf7eddb8006d8f45add755f"}, clear=False):
@@ -15,7 +26,7 @@ class TestUpdatesAPI:
         assert response.status_code == 200
         result = response.json()
         assert result["version"]
-        assert result["repo"] == "vmhomelab/Printbuddy"
+        assert result["repo"] == "FueSee/seegerbuddy"
         assert result["source_ref"] == "1a593e7b9440ce692cf7eddb8006d8f45add755f"
         assert result["source_ref_short"] == "1a593e7"
         assert result["display_version"].endswith("(1a593e7)")
@@ -784,3 +795,43 @@ class TestUpdatesAPI:
         # at the captured cwd. If this fails the cwd is wrong even if it isn't
         # base_dir — useful diagnostic if someone refactors path handling.
         assert (Path(pip_cwd) / "requirements.txt").exists()
+
+
+class TestForkUpdatesDisabled:
+    """Seeger fork: nothing in the app may fetch or install the upstream version."""
+
+    @pytest.mark.asyncio
+    async def test_check_reports_disabled_without_contacting_github(self, async_client: AsyncClient):
+        with patch("backend.app.api.routes.updates.httpx.AsyncClient") as http_client:
+            response = await async_client.get("/api/v1/updates/check")
+        result = response.json()
+        assert result["update_available"] is False
+        assert result["in_app_updates_disabled"] is True
+        http_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_apply_refuses_and_never_runs_update(self, async_client: AsyncClient):
+        with (
+            patch("backend.app.api.routes.updates._is_docker_environment", return_value=False),
+            patch("backend.app.api.routes.updates._is_ha_addon", return_value=False),
+            patch("backend.app.api.routes.updates._perform_update", new=AsyncMock()) as perform,
+        ):
+            response = await async_client.post("/api/v1/updates/apply")
+        assert response.json()["success"] is False
+        perform.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_self_update_refuses_even_when_sidecar_configured(self, async_client: AsyncClient):
+        from backend.app.core.config import settings
+
+        with (
+            patch.object(settings, "self_update_enabled", True),
+            patch.object(settings, "updater_url", "http://updater:8080"),
+            patch.object(settings, "updater_token", "secret"),
+            patch("backend.app.api.routes.updates.httpx.AsyncClient") as http_client,
+        ):
+            status = (await async_client.get("/api/v1/updates/self-update/status")).json()
+            response = await async_client.post("/api/v1/updates/self-update")
+        assert status["available"] is False
+        assert response.status_code == 400
+        http_client.assert_not_called()

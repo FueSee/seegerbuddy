@@ -2184,6 +2184,7 @@ export default {
     updateViaHomeAssistant: 'Updates werden vom Home Assistant Supervisor verwaltet. Öffne Einstellungen → Add-ons → Printbuddy in Home Assistant, um die neue Version zu installieren.',
     installUpdate: 'Update installieren',
     latestVersionRunning: 'Sie verwenden die neueste Version',
+    inAppUpdatesDisabled: 'Updates in der App sind für diese Seeger-Version abgeschaltet. Der Administrator aktualisiert den Server direkt aus unserem Fork.',
     failedToCheckUpdates: 'Update-Prüfung fehlgeschlagen: {{error}}',
     // Data Management
     backupRestore: 'Sicherung & Wiederherstellung',
