@@ -1,0 +1,29 @@
+# Seegerbuddy on a Synology NAS (Container Manager -> Project).
+#
+# The NAS does not build the app itself. The image is built in the Ubuntu VM
+# (docker compose up -d --build), exported with
+#   sudo docker save seeger-printbuddy:local -o ~/seegerbuddy-image.tar
+# and imported in Container Manager -> Image -> Import -> Add from file.
+#
+# Create the folders "data" and "logs" next to this file (File Station)
+# before starting the project. Printers, settings, pictures and print history
+# live in "data" and survive image updates.
+services:
+  printbuddy:
+    image: seeger-printbuddy:local
+    container_name: seegerbuddy
+    cap_add:
+      - NET_BIND_SERVICE
+    stop_grace_period: 30s
+    # Host networking: the app talks to the printers directly (MQTT/FTP/camera).
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - TZ=Europe/Berlin
+      - PUID=1000
+      - PGID=1000
+      - PORT=8000
+      - DEBUG=false
+    restart: unless-stopped
