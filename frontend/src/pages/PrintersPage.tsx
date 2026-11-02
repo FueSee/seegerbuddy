@@ -122,7 +122,7 @@ import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveLoadedFilamentInfo, resolveTrayFillLevel } from '../utils/amsHelpers';
-import { getDefaultPrinterImage, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
+import { getDefaultPrinterImage, getPrinterDisplayImage, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
 import { appAssetPath } from '../utils/assetPaths';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
@@ -467,6 +467,21 @@ function getPrusaLinkWebUrl(printer: Printer): string | null {
   return `http://${rawUrl}`;
 }
 
+// OctoPrint printers are configured by URL only; the host doubles as ip_address.
+function normalizeOctoPrintUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function octoPrintHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 function isPrusaPrinter(printer: Pick<Printer, 'provider' | 'model'>): boolean {
   const provider = printer.provider?.toLowerCase();
   const model = printer.model?.toLowerCase() ?? '';
@@ -546,6 +561,86 @@ function PrinterModelImagePreview({ model }: { model: string | null | undefined 
         <div className="text-sm font-medium text-white truncate">{label}</div>
         <div className="text-xs text-bambu-gray">
           {t('printers.modal.modelImagePreview', 'Preview image changes with the selected model.')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PrinterCustomImageControl({ printer }: { printer: Printer }) {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [filename, setFilename] = useState(printer.custom_image_filename);
+  const [busy, setBusy] = useState(false);
+  const imageSrc = getPrinterDisplayImage({ ...printer, custom_image_filename: filename });
+
+  const apply = (updated: Printer) => {
+    setFilename(updated.custom_image_filename);
+    queryClient.invalidateQueries({ queryKey: ['printers'] });
+  };
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Image is too large (max 10 MiB)', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      apply(await api.uploadPrinterImage(printer.id, file));
+      showToast('Printer image updated', 'success');
+    } catch (error) {
+      showToast((error as Error).message || 'Failed to update printer image', 'error');
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      apply(await api.deletePrinterImage(printer.id));
+      showToast('Using model image', 'success');
+    } catch (error) {
+      showToast((error as Error).message || 'Failed to remove printer image', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="block text-sm text-bambu-gray mb-1">Printer image</label>
+      <div className="rounded-lg border border-bambu-dark-tertiary bg-bambu-dark/60 p-3 flex items-center gap-3">
+        <img
+          src={imageSrc}
+          alt={printer.name}
+          className="w-20 h-20 object-contain rounded bg-bambu-dark flex-shrink-0"
+          onError={(event) => { event.currentTarget.src = getDefaultPrinterImage(); }}
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <p className="text-xs text-bambu-gray">
+            {filename ? 'A custom image is active for this printer.' : 'Upload JPG, PNG, GIF, or WebP to distinguish printers of the same model.'}
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+            className="hidden"
+            onChange={(event) => upload(event.target.files?.[0])}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+              {filename ? 'Replace image' : 'Upload image'}
+            </Button>
+            {filename && (
+              <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={remove}>
+                Use model image
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -2129,6 +2224,7 @@ function PrinterCard({
   const isBambuProvider = !printer.provider || printer.provider === 'bambu';
   const isMoonrakerProvider = printer.provider === 'klipper' || printer.provider === 'mainsail' || printer.provider === 'fluidd';
   const isElegooSDCPProvider = printer.provider === 'elegoo_sdcp';
+  const isOctoPrintProvider = printer.provider === 'octoprint';
   const isCrealityK2Moonraker = isMoonrakerProvider && /creality\s+k2/i.test(printer.model || '');
   // Loaded-spool assignment is local inventory state, not a provider control.
   // Keep unsupported provider/manual controls hidden, but allow single-spool
@@ -3051,7 +3147,7 @@ function PrinterCard({
     status?.connected && viewMode === 'expanded' && ((amsData?.length ?? 0) > 0 || (status.vt_tray?.length ?? 0) > 0) ? 'filaments' : null,
     smartPlug && viewMode === 'expanded' ? 'smart-plug' : null,
     viewMode === 'expanded' ? 'actions' : null,
-    (printer.provider === 'klipper' || printer.provider === 'mainsail' || printer.provider === 'fluidd') && !isPrusaModelPrinter && viewMode === 'expanded' ? 'manual-controls' : null,
+    (printer.provider === 'klipper' || printer.provider === 'mainsail' || printer.provider === 'fluidd' || printer.provider === 'octoprint') && !isPrusaModelPrinter && viewMode === 'expanded' ? 'manual-controls' : null,
   ].filter((sectionId): sectionId is PrinterCardSectionId => sectionId !== null);
 
   if (shouldHide) {
@@ -3281,7 +3377,7 @@ function PrinterCard({
             <div className="flex items-center gap-3 min-w-0 flex-1">
               {/* Printer Model Image */}
               <img
-                src={getPrinterImage(printer.model)}
+                src={getPrinterDisplayImage(printer)}
                 alt={printer.model || t('common.printer')}
                 className={`object-contain rounded-lg bg-bambu-dark flex-shrink-0 ${getImageSize()}`}
                 onError={(event) => {
@@ -5828,7 +5924,7 @@ function PrinterCard({
                   </Button>
                 </div>
               )}
-              {(isBambuProvider || printer.provider === 'prusalink' || isMoonrakerProvider) && (
+              {(isBambuProvider || printer.provider === 'prusalink' || isMoonrakerProvider || isOctoPrintProvider) && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -5854,7 +5950,7 @@ function PrinterCard({
                       {t('common.upload', 'Upload')}
                     </Button>
                   )}
-                  {(isBambuProvider || isElegooSDCPProvider) && !isPrusaModelPrinter && (
+                  {(isBambuProvider || isElegooSDCPProvider || isOctoPrintProvider) && !isPrusaModelPrinter && (
                     <Button
                       size="sm"
                       onClick={() => setShowUploadForPrint(true)}
@@ -5872,8 +5968,8 @@ function PrinterCard({
           </SortablePrinterCardSection>
         )}
 
-        {/* Moonraker toolhead control panels */}
-        {(isMoonrakerProvider) && !isPrusaModelPrinter && viewMode === 'expanded' && (
+        {/* Moonraker / OctoPrint toolhead control panels */}
+        {(isMoonrakerProvider || isOctoPrintProvider) && !isPrusaModelPrinter && viewMode === 'expanded' && (
           <SortablePrinterCardSection layoutEditing={layoutEditing} id="manual-controls" title="Manual controls" order={getCardSectionOrder('manual-controls')}>
           <Collapsible
             defaultOpen={false}
@@ -5886,7 +5982,7 @@ function PrinterCard({
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-white truncate">Manual controls</p>
                     <p className="text-[10px] text-bambu-gray truncate">
-                      Klipper movement, extrusion, and temperatures
+                      {isOctoPrintProvider ? 'Movement, extrusion, and temperatures' : 'Klipper movement, extrusion, and temperatures'}
                     </p>
                   </div>
                 </div>
@@ -6664,6 +6760,7 @@ function AddPrinterModal({
   const [subnet, setSubnet] = useState('');
   const [customSubnet, setCustomSubnet] = useState(false);
   const [moonrakerPorts, setMoonrakerPorts] = useState('7125,80');
+  const [octoprintPorts, setOctoprintPorts] = useState('5000,80');
   const [scanProgress, setScanProgress] = useState({ scanned: 0, total: 0 });
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [prusaLinkApiAuthMode, setPrusaLinkApiAuthMode] = useState<PrusaLinkApiAuthMode>('auto');
@@ -6698,10 +6795,14 @@ function AddPrinterModal({
   const isPrusaConnectProvider = form.provider === 'prusaconnect';
   const isPrusaProvider = isPrusaLinkProvider || isPrusaConnectProvider;
   const isElegooSDCPProvider = form.provider === 'elegoo_sdcp';
-  const isHttpProvider = isMoonrakerProvider || isPrusaProvider || isElegooSDCPProvider;
+  const isOctoPrintProvider = form.provider === 'octoprint';
+  const isHttpProvider = isMoonrakerProvider || isPrusaProvider || isElegooSDCPProvider || isOctoPrintProvider;
+  // Providers discovered by an HTTP subnet scan instead of Bambu SSDP.
+  const isHttpScanProvider = isMoonrakerProvider || isOctoPrintProvider;
 
   const buildSubmitPayload = (): PrinterCreate => {
-    const ipAddress = form.ip_address.trim();
+    const octoPrintUrl = isOctoPrintProvider ? normalizeOctoPrintUrl(form.api_url || '') : '';
+    const ipAddress = isOctoPrintProvider ? octoPrintHost(octoPrintUrl) : form.ip_address.trim();
     const fallbackUrl = isMoonrakerProvider
       ? `http://${ipAddress}:7125`
       : isPrusaLinkProvider
@@ -6709,7 +6810,7 @@ function AddPrinterModal({
         : isPrusaConnectProvider
           ? 'https://connect-mobile-api.prusa3d.com'
           : undefined;
-    const apiUrl = (form.api_url || '').trim() || fallbackUrl;
+    const apiUrl = isOctoPrintProvider ? octoPrintUrl : (form.api_url || '').trim() || fallbackUrl;
     const externalCameraUrl = isHttpProvider ? (form.external_camera_url || '').trim() : '';
     return {
       ...form,
@@ -6801,7 +6902,31 @@ function AddPrinterModal({
     setScanProgress({ scanned: 0, total: 0 });
 
     try {
-      if (isMoonrakerProvider) {
+      if (isOctoPrintProvider) {
+        const ports = octoprintPorts
+          .split(',')
+          .map((p) => parseInt(p.trim(), 10))
+          .filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535);
+        await discoveryApi.startOctoPrintSubnetScan(subnet, 1.0, ports.length > 0 ? ports : undefined);
+
+        const pollInterval = setInterval(async () => {
+          try {
+            const status = await discoveryApi.getOctoPrintScanStatus();
+            setScanProgress({ scanned: status.scanned, total: status.total });
+
+            const printers = await discoveryApi.getDiscoveredOctoPrintPrinters();
+            setDiscovered(printers);
+
+            if (!status.running) {
+              clearInterval(pollInterval);
+              setDiscovering(false);
+              setHasScanned(true);
+            }
+          } catch (e) {
+            console.error('Failed to get OctoPrint scan status:', e);
+          }
+        }, 500);
+      } else if (isMoonrakerProvider) {
         // Moonraker has no SSDP path — always subnet-scan via HTTP server/info
         const ports = moonrakerPorts
           .split(',')
@@ -6894,7 +7019,17 @@ function AddPrinterModal({
   const selectPrinter = (printer: DiscoveredPrinter) => {
     // Don't pre-fill serial if it's a placeholder (unknown-*) - user needs to enter actual serial
     const serialNumber = printer.serial.startsWith('unknown-') ? '' : printer.serial;
-    if (isMoonrakerProvider) {
+    if (isOctoPrintProvider) {
+      setForm({
+        ...form,
+        name: printer.name || '',
+        serial_number: '',
+        ip_address: printer.ip_address,
+        api_url: printer.api_url || `http://${printer.ip_address}:5000`,
+        model: '',
+      });
+      setDiscoveryError('');
+    } else if (isMoonrakerProvider) {
       setForm({
         ...form,
         name: printer.name || '',
@@ -6919,8 +7054,10 @@ function AddPrinterModal({
       });
       setDiscoveryError('');
     }
-    // Clear discovery results after selection
+    // Clear discovery results after selection; reset hasScanned so the empty
+    // list is not reported as "no printers found".
     setDiscovered([]);
+    setHasScanned(false);
   };
 
   // Cleanup discovery on unmount
@@ -6929,6 +7066,7 @@ function AddPrinterModal({
       discoveryApi.stopDiscovery().catch(() => {});
       discoveryApi.stopSubnetScan().catch(() => {});
       discoveryApi.stopMoonrakerSubnetScan().catch(() => {});
+      discoveryApi.stopOctoPrintSubnetScan().catch(() => {});
     };
   }, []);
 
@@ -6980,6 +7118,7 @@ function AddPrinterModal({
               <option value="fluidd">Fluidd / Moonraker</option>
               <option value="prusalink">Prusa</option>
               <option value="elegoo_sdcp">Elegoo SDCP (Centauri Carbon)</option>
+              <option value="octoprint">OctoPrint (Marlin / RepRap)</option>
             </select>
             {isPrusaProvider && (
               <div className="mt-3">
@@ -7027,12 +7166,17 @@ function AddPrinterModal({
                 Elegoo SDCP uses the printer's local LAN WebSocket at ws://printer-host:3030/websocket. No API key is required. Initial support is status/test only for Centauri Carbon-class SDCP firmware.
               </p>
             )}
+            {isOctoPrintProvider && (
+              <p className="text-xs text-bambu-gray mt-1">
+                For Marlin/RepRap printers managed by OctoPrint (OctoPi), usually at http://octopi.local or http://host:5000. Create an API key in OctoPrint under Settings → Application Keys (or your user's API key); it needs file, print and control permissions.
+              </p>
+            )}
           </div>
 
           {/* Discovery Section — Bambu (SSDP/subnet) or Moonraker (subnet HTTP) */}
-          {(!isHttpProvider || isMoonrakerProvider) && (
+          {(!isHttpProvider || isHttpScanProvider) && (
           <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
-            {(isDocker || isMoonrakerProvider) && (
+            {(isDocker || isHttpScanProvider) && (
               <div className="mb-3">
                 <label className="block text-sm text-bambu-gray mb-1">
                   {t('printers.discovery.subnetToScan')}
@@ -7082,10 +7226,31 @@ function AddPrinterModal({
                   </div>
                 )}
                 <p className="mt-1 text-xs text-bambu-gray">
-                  {isMoonrakerProvider
-                    ? t('printers.discovery.moonrakerSubnetNote')
-                    : t('printers.discovery.dockerNote')}
+                  {isOctoPrintProvider
+                    ? t('printers.discovery.octoprintSubnetNote')
+                    : isMoonrakerProvider
+                      ? t('printers.discovery.moonrakerSubnetNote')
+                      : t('printers.discovery.dockerNote')}
                 </p>
+                {isOctoPrintProvider && (
+                  <div className="mt-3">
+                    <label htmlFor="octoprint_scan_ports" className="block text-sm text-bambu-gray mb-1">
+                      {t('printers.discovery.moonrakerPorts')}
+                    </label>
+                    <input
+                      id="octoprint_scan_ports"
+                      type="text"
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none text-sm"
+                      value={octoprintPorts}
+                      onChange={(e) => setOctoprintPorts(e.target.value)}
+                      placeholder="5000,80"
+                      disabled={discovering}
+                    />
+                    <p className="mt-1 text-xs text-bambu-gray">
+                      {t('printers.discovery.octoprintPortsNote')}
+                    </p>
+                  </div>
+                )}
                 {isMoonrakerProvider && (
                   <div className="mt-3">
                     <label className="block text-sm text-bambu-gray mb-1">
@@ -7111,20 +7276,22 @@ function AddPrinterModal({
               type="button"
               variant="secondary"
               onClick={startDiscovery}
-              disabled={discovering || ((isDocker || isMoonrakerProvider) && !subnet.trim())}
+              disabled={discovering || ((isDocker || isHttpScanProvider) && !subnet.trim())}
               className="w-full"
             >
               {discovering ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {(isDocker || isMoonrakerProvider) && scanProgress.total > 0
+                  {(isDocker || isHttpScanProvider) && scanProgress.total > 0
                     ? t('printers.discovery.scanProgress', { scanned: scanProgress.scanned, total: scanProgress.total })
                     : t('printers.discovery.scanning')}
                 </>
               ) : (
                 <>
                   <Search className="w-4 h-4" />
-                  {isMoonrakerProvider
+                  {isOctoPrintProvider
+                    ? t('printers.discovery.scanSubnetOctoPrint')
+                    : isMoonrakerProvider
                     ? t('printers.discovery.scanSubnetMoonraker')
                     : isDocker
                       ? t('printers.discovery.scanSubnet')
@@ -7150,14 +7317,14 @@ function AddPrinterModal({
                         {printer.name || printer.serial}
                       </p>
                       <p className="text-xs text-bambu-gray truncate">
-                        {isMoonrakerProvider
-                          ? (printer.api_url || `http://${printer.ip_address}:7125`)
+                        {isHttpScanProvider
+                          ? (printer.api_url || printer.ip_address)
                           : (mapModelCode(printer.model) || t('printers.discovery.unknown'))}
                         {' • '}{printer.ip_address}
                         {printer.needs_auth && (
-                          <span className="text-yellow-500"> • auth</span>
+                          <span className="text-yellow-500"> • {isOctoPrintProvider ? 'API key' : 'auth'}</span>
                         )}
-                        {!isMoonrakerProvider && printer.serial.startsWith('unknown-') && (
+                        {!isHttpScanProvider && printer.serial.startsWith('unknown-') && (
                           <span className="text-yellow-500"> • {t('printers.discovery.serialRequired')}</span>
                         )}
                       </p>
@@ -7170,7 +7337,9 @@ function AddPrinterModal({
 
             {discovering && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {isMoonrakerProvider
+                {isOctoPrintProvider
+                  ? t('printers.discovery.scanningSubnetOctoPrint')
+                  : isMoonrakerProvider
                   ? t('printers.discovery.scanningSubnetMoonraker')
                   : isDocker
                     ? t('printers.discovery.scanningSubnet')
@@ -7180,7 +7349,9 @@ function AddPrinterModal({
 
             {hasScanned && !discovering && discovered.length === 0 && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {isMoonrakerProvider
+                {isOctoPrintProvider
+                  ? t('printers.discovery.noPrintersFoundSubnetOctoPrint')
+                  : isMoonrakerProvider
                   ? t('printers.discovery.noPrintersFoundSubnetMoonraker')
                   : isDocker
                     ? t('printers.discovery.noPrintersFoundSubnet')
@@ -7209,6 +7380,7 @@ function AddPrinterModal({
                 placeholder={t('printers.modal.myPrinter')}
               />
             </div>
+            {!isOctoPrintProvider && (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">
                 {isPrusaConnectProvider ? 'Prusa Connect printer UUID' : t('printers.ipAddress')}
@@ -7226,6 +7398,7 @@ function AddPrinterModal({
                 <p className="text-xs text-bambu-gray mt-1">Use the printer UUID from Prusa Connect, not the local IP address.</p>
               )}
             </div>
+            )}
             {!isHttpProvider && (
               <>
                 <div>
@@ -7321,6 +7494,35 @@ function AddPrinterModal({
                 </div>
               </>
             )}
+            {isOctoPrintProvider && (
+              <>
+                <div>
+                  <label htmlFor="octoprint_url" className="block text-sm text-bambu-gray mb-1">OctoPrint URL</label>
+                  <input
+                    id="octoprint_url"
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.api_url || ''}
+                    onChange={(e) => setForm({ ...form, api_url: e.target.value })}
+                    placeholder="http://octopi.local"
+                  />
+                  <p className="text-xs text-bambu-gray mt-1">The address you open OctoPrint at, e.g. http://octopi.local (OctoPi) or http://192.168.1.60:5000. http:// is added if missing.</p>
+                </div>
+                <div>
+                  <label htmlFor="octoprint_api_key" className="block text-sm text-bambu-gray mb-1">OctoPrint API key</label>
+                  <input
+                    id="octoprint_api_key"
+                    type="password"
+                    required
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    value={form.auth_token || ''}
+                    onChange={(e) => setForm({ ...form, auth_token: e.target.value })}
+                    placeholder="Application or user API key"
+                  />
+                </div>
+              </>
+            )}
             {isPrusaConnectProvider && (
               <div>
                 <label className="block text-sm text-bambu-gray mb-1">Connect Mobile API token</label>
@@ -7349,6 +7551,11 @@ function AddPrinterModal({
                   <p className="text-xs text-bambu-gray mt-1">
                     Optional for non-Bambu printers. Add a camera stream or snapshot URL if available; Printbuddy will detect MJPEG, RTSP, snapshot, or USB camera type automatically.
                   </p>
+                  {isOctoPrintProvider && (
+                    <p className="text-xs text-bambu-gray mt-1">
+                      Leave empty to use the webcam configured in OctoPrint, including its rotation.
+                    </p>
+                  )}
                   {isMoonrakerProvider && (
                     <div className="mt-3 flex flex-col gap-2">
                       <Button
@@ -7770,10 +7977,12 @@ function EditPrinterModal({
   const { showToast } = useToast();
   const isPrusaLinkProvider = printer.provider === 'prusalink';
   const isElegooSDCPProvider = printer.provider === 'elegoo_sdcp';
+  const isOctoPrintProvider = printer.provider === 'octoprint';
   const isBambuProvider = !printer.provider || printer.provider === 'bambu';
   const [form, setForm] = useState({
     name: printer.name,
     ip_address: printer.ip_address,
+    api_url: printer.api_url || '',
     access_code: '',
     model: printer.model || '',
     location: printer.location || '',
@@ -7817,6 +8026,13 @@ function EditPrinterModal({
     };
     if (isPrusaLinkProvider) {
       data.provider_options = buildPrusaLinkProviderOptions(form.prusa_link_api_auth_mode, printer.provider_options);
+      if (form.access_code) {
+        data.auth_token = form.access_code;
+      }
+    } else if (isOctoPrintProvider) {
+      const octoPrintUrl = normalizeOctoPrintUrl(form.api_url);
+      data.api_url = octoPrintUrl;
+      data.ip_address = octoPrintHost(octoPrintUrl) || form.ip_address;
       if (form.access_code) {
         data.auth_token = form.access_code;
       }
@@ -7871,6 +8087,20 @@ function EditPrinterModal({
                 placeholder={t('printers.modal.myPrinter')}
               />
             </div>
+            {isOctoPrintProvider ? (
+            <div>
+              <label htmlFor="edit_octoprint_url" className="block text-sm text-bambu-gray mb-1">OctoPrint URL</label>
+              <input
+                id="edit_octoprint_url"
+                type="text"
+                required
+                className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                value={form.api_url}
+                onChange={(e) => setForm({ ...form, api_url: e.target.value })}
+                placeholder="http://octopi.local"
+              />
+            </div>
+            ) : (
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.ipAddress')}</label>
               <input
@@ -7883,6 +8113,7 @@ function EditPrinterModal({
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
@@ -7896,7 +8127,7 @@ function EditPrinterModal({
             {!isElegooSDCPProvider && (
             <div>
               <label htmlFor="edit_printer_secret" className="block text-sm text-bambu-gray mb-1">
-                {isPrusaLinkProvider ? 'PrusaLink password / API key' : t('printers.accessCode')}
+                {isPrusaLinkProvider ? 'PrusaLink password / API key' : isOctoPrintProvider ? 'OctoPrint API key' : t('printers.accessCode')}
               </label>
               <input
                 id="edit_printer_secret"
@@ -7908,6 +8139,9 @@ function EditPrinterModal({
               />
               {isPrusaLinkProvider ? (
                 <p className="text-xs text-bambu-gray mt-1">Leave empty to keep the current PrusaLink secret.</p>
+              ) : null}
+              {isOctoPrintProvider ? (
+                <p className="text-xs text-bambu-gray mt-1">Leave empty to keep the current OctoPrint API key.</p>
               ) : null}
             </div>
             )}
@@ -7946,6 +8180,7 @@ function EditPrinterModal({
               />
               <PrinterModelImagePreview model={form.model} />
             </div>
+            <PrinterCustomImageControl printer={printer} />
             <div>
               <label className="block text-sm text-bambu-gray mb-1">Location / Group</label>
               <input
@@ -8399,6 +8634,17 @@ export function PrintersPage() {
       // the raw message is an English fallback for non-UI clients.
       if (error instanceof ApiError && error.code === 'printer_connection_failed') {
         showToast(t('printers.toast.connectionFailedNotAdded'), 'error');
+        return;
+      }
+      if (error instanceof ApiError && error.code === 'octoprint_api_key_invalid') {
+        showToast(t('printers.toast.octoprintApiKeyInvalid'), 'error');
+        return;
+      }
+      if (error instanceof ApiError && error.code === 'octoprint_permissions_missing') {
+        const missing = Array.isArray(error.detail?.missing_permissions)
+          ? (error.detail.missing_permissions as string[]).join(', ')
+          : '';
+        showToast(t('printers.toast.octoprintPermissionsMissing', { permissions: missing }), 'error');
         return;
       }
       showToast(error.message || t('printers.toast.failedToAdd'), 'error');

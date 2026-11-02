@@ -16,7 +16,16 @@ from backend.app.services.printer_providers.prusalink import PrusaLinkPrinterCli
 
 
 def test_supported_printbuddy_providers_are_registered():
-    assert {"bambu", "klipper", "mainsail", "fluidd", "prusalink", "prusaconnect", "elegoo_sdcp"} == SUPPORTED_PROVIDERS
+    assert {
+        "bambu",
+        "klipper",
+        "mainsail",
+        "fluidd",
+        "prusalink",
+        "prusaconnect",
+        "elegoo_sdcp",
+        "octoprint",
+    } == SUPPORTED_PROVIDERS
 
 
 @pytest.mark.parametrize("provider", ["klipper", "mainsail", "fluidd"])
@@ -854,7 +863,7 @@ async def test_prusalink_connection_probe_returns_detected_provider_options(monk
 
 def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="Unsupported printer provider"):
-        normalize_provider("octoprint")
+        normalize_provider("repetier")
 
 
 def test_moonraker_lists_gcode_files(monkeypatch):
@@ -1145,3 +1154,160 @@ def test_prusalink_factory_wires_lifecycle_callbacks():
     assert client.on_print_start is callbacks["on_print_start"]
     assert client.on_print_complete is callbacks["on_print_complete"]
     assert client.on_bed_temp_update is callbacks["on_bed_temp_update"]
+
+
+@pytest.mark.asyncio
+async def test_octoprint_connection_probe_verifies_api_key_before_connecting(monkeypatch):
+    calls = []
+
+    class FakeOctoPrintClient:
+        state = SimpleNamespace(state="IDLE")
+
+        def verify_api_key(self):
+            calls.append("verify")
+
+        def connect(self):
+            calls.append("connect")
+
+        def disconnect(self):
+            calls.append("disconnect")
+
+    monkeypatch.setattr(
+        "backend.app.services.printer_manager.create_printer_client",
+        lambda printer: FakeOctoPrintClient(),
+    )
+
+    result = await PrinterManager().test_connection(
+        ip_address="octopi.local",
+        serial_number="OCTOPRINT-OCTOPI-LOCAL",
+        access_code="octoprint",
+        provider="octoprint",
+        api_url="http://octopi.local",
+        auth_token="key",
+    )
+
+    assert result == {"success": True, "state": "IDLE", "model": "OctoPrint"}
+    assert calls == ["verify", "connect", "disconnect"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("missing", "error_code"),
+    [([], "octoprint_api_key_invalid"), (["PRINT", "CONTROL"], "octoprint_permissions_missing")],
+)
+async def test_octoprint_connection_probe_reports_auth_problems(monkeypatch, missing, error_code):
+    from backend.app.services.printer_providers.octoprint import OctoPrintAuthError
+
+    class FakeOctoPrintClient:
+        state = SimpleNamespace(state=None)
+
+        def verify_api_key(self):
+            raise OctoPrintAuthError("nope", missing_permissions=missing)
+
+        def connect(self):
+            raise AssertionError("connect must not run after a failed key check")
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(
+        "backend.app.services.printer_manager.create_printer_client",
+        lambda printer: FakeOctoPrintClient(),
+    )
+
+    result = await PrinterManager().test_connection(
+        ip_address="octopi.local",
+        serial_number="OCTOPRINT-OCTOPI-LOCAL",
+        access_code="octoprint",
+        provider="octoprint",
+        api_url="http://octopi.local",
+        auth_token="key",
+    )
+
+    assert result["success"] is False
+    assert result["model"] == "OctoPrint"
+    assert result["error_code"] == error_code
+    assert result["missing_permissions"] == missing
+
+
+@pytest.mark.asyncio
+async def test_octoprint_connection_probe_returns_detected_webcam(monkeypatch):
+    class FakeOctoPrintClient:
+        state = SimpleNamespace(state="IDLE")
+
+        def verify_api_key(self):
+            pass
+
+        def connect(self):
+            pass
+
+        def discover_webcam(self):
+            return {
+                "camera_url": "http://octopi.local/webcam/?action=stream",
+                "camera_snapshot_url": "",
+                "camera_type": "mjpeg",
+                "camera_rotation": 180,
+            }
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(
+        "backend.app.services.printer_manager.create_printer_client",
+        lambda printer: FakeOctoPrintClient(),
+    )
+
+    result = await PrinterManager().test_connection(
+        ip_address="octopi.local",
+        serial_number="OCTOPRINT-OCTOPI-LOCAL",
+        access_code="octoprint",
+        provider="octoprint",
+        api_url="http://octopi.local",
+        auth_token="key",
+    )
+
+    assert result["success"] is True
+    assert result["detected_camera"] == {
+        "camera_url": "http://octopi.local/webcam/?action=stream",
+        "camera_snapshot_url": "",
+        "camera_type": "mjpeg",
+        "camera_rotation": 180,
+    }
+
+
+@pytest.mark.asyncio
+async def test_octoprint_webcam_detection_failure_does_not_block_adding(monkeypatch):
+    class FakeOctoPrintClient:
+        state = SimpleNamespace(state="IDLE")
+
+        def verify_api_key(self):
+            pass
+
+        def connect(self):
+            pass
+
+        def discover_webcam(self):
+            raise httpx.HTTPStatusError(
+                "forbidden",
+                request=httpx.Request("GET", "http://octopi.local/api/settings"),
+                response=httpx.Response(403),
+            )
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(
+        "backend.app.services.printer_manager.create_printer_client",
+        lambda printer: FakeOctoPrintClient(),
+    )
+
+    result = await PrinterManager().test_connection(
+        ip_address="octopi.local",
+        serial_number="OCTOPRINT-OCTOPI-LOCAL",
+        access_code="octoprint",
+        provider="octoprint",
+        api_url="http://octopi.local",
+        auth_token="key",
+    )
+
+    assert result == {"success": True, "state": "IDLE", "model": "OctoPrint"}

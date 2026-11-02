@@ -489,6 +489,18 @@ class TestPrinterManager:
 
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_wait_for_cooldown_checks_every_reported_nozzle(self, manager, mock_client):
+        """A multi-toolhead printer is unsafe while any reported nozzle is hot."""
+        mock_client.state.connected = True
+        mock_client.state.temperatures = {"nozzle": 40, "nozzle_2": 45, "nozzle_3": 48, "nozzle_4": 180, "bed": 30}
+        mock_client.check_staleness.return_value = True
+        manager._clients[1] = mock_client
+
+        result = await manager.wait_for_cooldown(1, target_temp=50, timeout=1, check_interval=1)
+
+        assert result is False
+
     # ========================================================================
     # Tests for logging methods
     # ========================================================================

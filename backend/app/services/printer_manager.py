@@ -11,8 +11,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.printer import Printer
 from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
 from backend.app.services.printer_providers.factory import create_printer_client, normalize_provider
+from backend.app.services.printer_providers.octoprint import OctoPrintAuthError
 
 logger = logging.getLogger(__name__)
+
+
+def reported_nozzle_temperatures(temperatures: dict[str, object]) -> tuple[tuple[int, object], ...]:
+    """Return direct nozzle readings in stable physical-nozzle order.
+
+    Provider state uses ``nozzle`` for the first toolhead and ``nozzle_N`` for
+    subsequent toolheads. Targets and heating flags deliberately do not match,
+    so callers can safely use this for live-change de-duplication, persistence,
+    safety checks, and metric labels.
+    """
+
+    nozzles: list[tuple[int, object]] = []
+    for key, value in temperatures.items():
+        if key == "nozzle":
+            nozzles.append((1, value))
+            continue
+        if key.startswith("nozzle_") and key[7:].isdigit():
+            nozzles.append((int(key[7:]), value))
+    return tuple(sorted(nozzles))
+
 
 # Replacing a client can synchronously wait for its network thread. Keep that
 # teardown bounded so a failed device connection cannot freeze the API loop.
@@ -592,10 +613,9 @@ class PrinterManager:
                 logger.warning("Printer %s disconnected during cooldown wait", printer_id)
                 return False
 
-            # Check nozzle temperature (and nozzle_2 for dual extruders)
-            nozzle_temp = state.temperatures.get("nozzle", 0)
-            nozzle_2_temp = state.temperatures.get("nozzle_2", 0)
-            max_temp = max(nozzle_temp, nozzle_2_temp)
+            # A printer is only safe after every reported toolhead is cool.
+            nozzle_temperatures = [float(value) for _index, value in reported_nozzle_temperatures(state.temperatures)]
+            max_temp = max(nozzle_temperatures, default=0)
 
             if max_temp <= target_temp:
                 logger.info("Printer %s cooled down to %s°C", printer_id, max_temp)
@@ -698,15 +718,24 @@ class PrinterManager:
             )()
             client = create_printer_client(probe_printer)
             detected_provider_options: dict[str, str] = {}
+            model_label = {
+                "prusalink": "PrusaLink",
+                "prusaconnect": "Prusa Connect Mobile",
+                "elegoo_sdcp": "Elegoo SDCP",
+                "octoprint": "OctoPrint",
+            }.get(provider_name, "Klipper/Moonraker")
             try:
                 if provider_name == "prusalink" and hasattr(client, "detect_api_auth_mode"):
                     detected_provider_options = await asyncio.to_thread(client.detect_api_auth_mode)
+                if provider_name == "octoprint":
+                    await asyncio.to_thread(client.verify_api_key)
                 await asyncio.to_thread(client.connect)
-                model_label = {
-                    "prusalink": "PrusaLink",
-                    "prusaconnect": "Prusa Connect Mobile",
-                    "elegoo_sdcp": "Elegoo SDCP",
-                }.get(provider_name, "Klipper/Moonraker")
+                detected_camera = None
+                if provider_name == "octoprint":
+                    try:
+                        detected_camera = await asyncio.to_thread(client.discover_webcam)
+                    except Exception as exc:  # noqa: BLE001 - camera detection must not block adding the printer
+                        logger.info("OctoPrint webcam detection failed: %s", type(exc).__name__)
                 result = {
                     "success": True,
                     "state": getattr(getattr(client, "state", None), "state", "connected"),
@@ -714,13 +743,21 @@ class PrinterManager:
                 }
                 if detected_provider_options:
                     result["provider_options"] = json.dumps(detected_provider_options, separators=(",", ":"))
+                if detected_camera:
+                    result["detected_camera"] = detected_camera
                 return result
+            except OctoPrintAuthError as exc:
+                return {
+                    "success": False,
+                    "state": None,
+                    "model": model_label,
+                    "error": type(exc).__name__,
+                    "error_code": (
+                        "octoprint_permissions_missing" if exc.missing_permissions else "octoprint_api_key_invalid"
+                    ),
+                    "missing_permissions": exc.missing_permissions,
+                }
             except Exception as exc:
-                model_label = {
-                    "prusalink": "PrusaLink",
-                    "prusaconnect": "Prusa Connect Mobile",
-                    "elegoo_sdcp": "Elegoo SDCP",
-                }.get(provider_name, "Klipper/Moonraker")
                 return {"success": False, "state": None, "model": model_label, "error": type(exc).__name__}
             finally:
                 disconnect = getattr(client, "disconnect", None)

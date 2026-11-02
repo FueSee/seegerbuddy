@@ -104,6 +104,7 @@ from backend.app.services.printer_manager import (
     parse_plate_id,
     printer_manager,
     printer_state_to_dict,
+    reported_nozzle_temperatures,
 )
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
@@ -1324,26 +1325,44 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     # Only broadcast if something meaningful changed (reduce WebSocket spam)
     # Include rounded temperatures to detect meaningful temp changes (within 1 degree)
     temps = state.temperatures or {}
-    nozzle_temp = round(temps.get("nozzle", 0))
+    nozzle_temperatures = tuple(
+        (
+            index,
+            round(float(value)),
+            round(float(temps.get(f"nozzle{'_' + str(index) if index > 1 else ''}_target", 0))),
+        )
+        for index, value in reported_nozzle_temperatures(temps)
+    )
     bed_temp = round(temps.get("bed", 0))
-    nozzle_2_temp = round(temps.get("nozzle_2", 0)) if "nozzle_2" in temps else ""
     chamber_temp = round(temps.get("chamber", 0)) if "chamber" in temps else ""
 
-    # Auto-detect dual-nozzle printers from MQTT temperature data
-    if "nozzle_2" in temps and printer_id not in _nozzle_count_updated:
-        _nozzle_count_updated.add(printer_id)
-        # Update nozzle_count in database
-        async with async_session() as db:
-            from backend.app.models.printer import Printer
+    # Persist the actual number of reported toolheads. This keeps dual-nozzle
+    # Bambu behavior intact while allowing U1-style four-nozzle printers (and
+    # future Moonraker providers) to expose their real capability count.
+    nozzle_count = max((index for index, _value, _target in nozzle_temperatures), default=1)
+    if nozzle_count > 1 and printer_id not in _nozzle_count_updated:
+        try:
+            async with async_session() as db:
+                from backend.app.models.printer import Printer
 
-            result = await db.execute(select(Printer).where(Printer.id == printer_id))
-            printer = result.scalar_one_or_none()
-            if printer and printer.nozzle_count != 2:
-                printer.nozzle_count = 2
-                await db.commit()
-                logging.getLogger(__name__).info(
-                    f"Auto-detected dual-nozzle printer {printer_id}, updated nozzle_count=2"
-                )
+                result = await db.execute(select(Printer).where(Printer.id == printer_id))
+                printer = result.scalar_one_or_none()
+                if printer and printer.nozzle_count != nozzle_count:
+                    printer.nozzle_count = nozzle_count
+                    await db.commit()
+                    logging.getLogger(__name__).info(
+                        "Auto-detected %s-nozzle printer %s, updated nozzle_count=%s",
+                        nozzle_count,
+                        printer_id,
+                        nozzle_count,
+                    )
+            _nozzle_count_updated.add(printer_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not persist auto-detected nozzle count for printer %s; will retry on the next status update",
+                printer_id,
+                exc_info=True,
+            )
 
     # Include target temps for heating phase detection
     bed_target = round(temps.get("bed_target", 0))
@@ -1378,7 +1397,7 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     )
     status_key = (
         f"{state.connected}:{state.state}:{state.progress}:{state.layer_num}:"
-        f"{nozzle_temp}:{bed_temp}:{nozzle_2_temp}:{chamber_temp}:"
+        f"{nozzle_temperatures}:{bed_temp}:{chamber_temp}:"
         f"{state.stg_cur}:{bed_target}:{nozzle_target}:"
         f"{state.cooling_fan_speed}:{state.big_fan1_speed}:{state.big_fan2_speed}:"
         f"{state.chamber_light}:{state.active_extruder}:{state.tray_now}:{vt_tray_key}:"
@@ -4201,7 +4220,9 @@ async def on_print_complete(printer_id: int, data: dict):
                 result = await db.execute(select(Printer).where(Printer.id == printer_id))
                 printer = result.scalar_one_or_none()
 
-            if printer:
+            # Only Bambu printers are reached over FTP; other providers would
+            # just burn three connection-refused retries per extension here.
+            if printer and _should_attempt_bambu_ftp_archive(printer):
                 from backend.app.services.bambu_ftp import delete_file_async
 
                 # Try both .3mf and .gcode extensions — the printer may have either
@@ -5919,6 +5940,14 @@ async def lifespan(app: FastAPI):
     async with async_session() as db:
         await init_printer_connections(db)
 
+    # Recover PrusaLink printers that were unavailable during startup or later
+    # went offline. The worker itself is provider-restricted, so it cannot
+    # replace a Bambu MQTT client and stall the API event loop.
+    from backend.app.services.printer_reconnect import PrinterReconnectService
+
+    printer_reconnect_service = PrinterReconnectService(printer_manager, async_session)
+    printer_reconnect_service.start()
+
     # Auto-connect to Spoolman if enabled
     async with async_session() as db:
         from backend.app.api.routes.settings import get_setting
@@ -6018,6 +6047,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    await printer_reconnect_service.stop()
     print_scheduler.stop()
     await background_dispatch.stop()
     smart_plug_manager.stop_scheduler()
@@ -6140,6 +6170,16 @@ PUBLIC_API_PATTERNS = [
     # The nonce itself is the credential: 32-byte random, single-use, ~30s TTL.
     "/obico/cached-frame/",  # /obico/cached-frame/{nonce}
 ]
+
+
+def is_public_stream_image_path(path: str) -> bool:
+    """Return whether a token-gated browser image URL may bypass JWT middleware.
+
+    The endpoint itself validates its ``?token=`` via
+    ``RequireCameraStreamTokenIfAuthEnabled``. Keep this exact match narrow so
+    no other printer route becomes reachable without bearer authentication.
+    """
+    return re.fullmatch(r"/api/v1/printers/\d+/image", path) is not None
 
 
 _security_headers_logger = logging.getLogger("backend.app.main.security_headers")
@@ -6318,6 +6358,12 @@ async def auth_middleware(request, call_next):
     for pattern in PUBLIC_API_PATTERNS:
         if pattern in path:
             return await call_next(request)
+
+    # Token-gated printer images are loaded through <img>, which cannot attach
+    # an Authorization header. The endpoint's own stream-token dependency is
+    # the credential check for this narrowly defined URL.
+    if is_public_stream_image_path(path):
+        return await call_next(request)
 
     # Check if auth is enabled
     try:
