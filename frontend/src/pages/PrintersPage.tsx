@@ -46,6 +46,7 @@ import {
   RotateCw,
   Box,
   HardDrive,
+  Flag,
   AlertTriangle,
   AlertCircle,
   Terminal,
@@ -121,6 +122,7 @@ import { SkipObjectsModal, SkipObjectsIcon } from '../components/SkipObjectsModa
 import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
+import { ReportFailureModal } from '../components/ReportFailureModal';
 import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveLoadedFilamentInfo, resolveTrayFillLevel } from '../utils/amsHelpers';
 import { getDefaultPrinterImage, getPrinterDisplayImage, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
 import { appAssetPath } from '../utils/assetPaths';
@@ -2039,6 +2041,7 @@ function PrinterCard({
   const [deleteArchives, setDeleteArchives] = useState(true);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showFileManager, setShowFileManager] = useState(false);
+  const [showReportFailure, setShowReportFailure] = useState(false);
   const [showMQTTDebug, setShowMQTTDebug] = useState(false);
   const [showPowerOnConfirm, setShowPowerOnConfirm] = useState(false);
   const [showPowerOffConfirm, setShowPowerOffConfirm] = useState(false);
@@ -5936,6 +5939,16 @@ function PrinterCard({
                   {t('printers.files')}
                 </Button>
               )}
+              {/* "Fehldruck melden": flag the current/last print with a reason */}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowReportFailure(true)}
+                title={t('customFailure.reportButtonTitle')}
+              >
+                <Flag className="w-4 h-4" />
+                {t('customFailure.reportButton')}
+              </Button>
               {isConnected && status?.state !== 'RUNNING' && status?.state !== 'PAUSE' && (
                 <>
                   {isPrusaModelPrinter && (
@@ -6478,6 +6491,10 @@ function PrinterCard({
           }}
           onCancel={() => setShowResumeConfirm(false)}
         />
+      )}
+
+      {showReportFailure && (
+        <ReportFailureModal printer={printer} onClose={() => setShowReportFailure(false)} />
       )}
 
       {/* Skip Objects Modal */}
