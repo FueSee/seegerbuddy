@@ -138,11 +138,11 @@ describe('FailReasonStatisticsWidget', () => {
     const user = userEvent.setup();
     render(<FailReasonStatisticsWidget />);
 
-    expect(await screen.findByText('fail_reason_08')).toBeInTheDocument();
+    expect(await screen.findByText('Entangled spool')).toBeInTheDocument();
     expect(screen.getByText('85.0')).toBeInTheDocument();
     expect(screen.queryByText('Part 17')).not.toBeInTheDocument(); // collapsed by default
 
-    await user.click(screen.getByText('fail_reason_08'));
+    await user.click(screen.getByText('Entangled spool'));
     expect(screen.getByText('Part 17')).toBeInTheDocument();
     expect(screen.queryByText('Part 2')).not.toBeInTheDocument(); // only the latest 15
     expect(screen.getAllByText('2026-11-02').length).toBe(15);
