@@ -5,8 +5,9 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { CustomFailureReasonStats, CustomFailureReport } from '../api/client';
 import { formatDuration } from '../utils/date';
+import { FailureReasonIcon } from './FailureReasonIcon';
 import {
-  customFailureReasonLabel,
+  customFailureReasonTitle,
   formatGrams,
   formatIsoDay,
   normalizeFilamentColor,
@@ -30,6 +31,11 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
   const { data: stats, isLoading } = useQuery({
     queryKey: ['customFailureStats', dateFrom, dateTo],
     queryFn: () => api.getCustomFailureStats({ dateFrom, dateTo }),
+  });
+  // Hidden reasons included: their earlier reports still show up here.
+  const { data: reasons = [] } = useQuery({
+    queryKey: ['customFailureReasons'],
+    queryFn: () => api.getCustomFailureReasons({ includeHidden: true }),
   });
 
   if (isLoading) {
@@ -65,6 +71,7 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
         <tbody>
           {stats.reasons.map((row) => {
             const isOpen = expanded.has(row.reason);
+            const reason = reasons.find((r) => r.code === row.reason);
             const canOpen = row.count > 0;
             return (
               <Fragment key={row.reason}>
@@ -74,13 +81,14 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
                   aria-expanded={canOpen ? isOpen : undefined}
                 >
                   <td className="py-2 pr-2 text-white">
-                    <span className="inline-flex items-center gap-1">
+                    <span className="inline-flex items-center gap-2">
                       {canOpen ? (
                         isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />
                       ) : (
                         <span className="w-4" />
                       )}
-                      {customFailureReasonLabel(t, row.reason)}
+                      <FailureReasonIcon reason={reason} className="w-5 h-5 text-bambu-gray flex-shrink-0" />
+                      {customFailureReasonTitle(t, row.reason, reason)}
                     </span>
                   </td>
                   <td className="py-2 px-2 text-right text-white">{row.count}</td>

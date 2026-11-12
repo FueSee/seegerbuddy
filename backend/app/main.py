@@ -26,6 +26,7 @@ from backend.app.api.routes import (
     bug_report,
     camera,
     cloud,
+    custom_failure_reasons,
     custom_failure_reports,
     discovery,
     external_links,
@@ -6564,6 +6565,7 @@ app.include_router(obico.router, prefix=app_settings.api_prefix)
 app.include_router(open_filament_database.router, prefix=app_settings.api_prefix)
 app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
+app.include_router(custom_failure_reasons.router, prefix=app_settings.api_prefix)
 app.include_router(custom_failure_reports.router, prefix=app_settings.api_prefix)
 
 

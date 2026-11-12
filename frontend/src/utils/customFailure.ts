@@ -1,10 +1,27 @@
 import type { TFunction } from 'i18next';
-import type { CustomFailureMaterial } from '../api/client';
+import type { CustomFailureMaterial, CustomFailureReason } from '../api/client';
 import { parseUTCDate } from './date';
 
-/** Display name for a reason code (e.g. "fail_reason_08"); falls back to the code itself. */
-export function customFailureReasonLabel(t: TFunction, code: string): string {
-  return t(`customFailure.reasons.${code}`, { defaultValue: code });
+/** Translated default text of a default reason ("fail_reason_08"), or '' if there is none. */
+function defaultReasonText(t: TFunction, code: string, part: 'title' | 'subtitle'): string {
+  return t(`customFailure.reasons.${code}.${part}`, { defaultValue: '' });
+}
+
+/** Bold title of a reason: own text if typed in the settings, else the translated default, else the code. */
+export function customFailureReasonTitle(t: TFunction, code: string, reason?: CustomFailureReason): string {
+  return reason?.title || defaultReasonText(t, code, 'title') || code;
+}
+
+/** Subtitle (examples) of a reason, or ''. */
+export function customFailureReasonSubtitle(t: TFunction, code: string, reason?: CustomFailureReason): string {
+  return reason?.subtitle || defaultReasonText(t, code, 'subtitle');
+}
+
+/** "As square as possible": columns = ceil(sqrt(n)), capped by how many tiles fit the screen. */
+export function reasonGridColumns(count: number, availableWidth: number, minTileWidth = 150): number {
+  const square = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const fitting = Math.max(1, Math.floor(availableWidth / minTileWidth));
+  return Math.min(square, fitting);
 }
 
 /** Local date as YYYY-MM-DD. */

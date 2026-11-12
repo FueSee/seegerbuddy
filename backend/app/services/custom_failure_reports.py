@@ -12,10 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.archive import PrintArchive
 from backend.app.models.custom_failure_report import CustomFailureReport
 from backend.app.models.printer import Printer
-
-# Placeholder reason codes until the real reasons are agreed on. The order here is
-# the order shown in the report dialog; display names are translated in the frontend.
-CUSTOM_FAILURE_REASONS: list[str] = [f"fail_reason_{i:02d}" for i in range(1, 11)]
+from backend.app.services.custom_failure_reasons import list_reasons
 
 # How many prints per reason the statistics show before "show all (N)".
 LATEST_ENTRIES_PER_REASON = 15
@@ -162,8 +159,8 @@ def report_to_dict(report: CustomFailureReport, has_thumbnail: bool = False) -> 
 async def reason_statistics(db: AsyncSession, date_from: date | None = None, date_to: date | None = None) -> dict:
     """Count and share per reason, plus the latest prints for each.
 
-    Every configured reason is listed (also with 0 reports), plus any reason code
-    found in the data that is no longer configured, so old reports never vanish.
+    Every visible reason is listed (also with 0 reports), plus any reason code
+    found in the data that is hidden or no longer configured, so old reports never vanish.
     """
     result = await db.execute(
         select(CustomFailureReport.custom_failure_reason, func.count(CustomFailureReport.id))
@@ -173,7 +170,10 @@ async def reason_statistics(db: AsyncSession, date_from: date | None = None, dat
     counts = dict(result.all())
     total = sum(counts.values())
 
-    codes = CUSTOM_FAILURE_REASONS + sorted(code for code in counts if code not in CUSTOM_FAILURE_REASONS)
+    configured = [reason.code for reason in await list_reasons(db, include_hidden=True)]
+    visible = {reason.code for reason in await list_reasons(db)}
+    codes = [code for code in configured if code in visible or code in counts]
+    codes += sorted(code for code in counts if code not in configured)
     reasons = []
     for code in codes:
         count = counts.get(code, 0)

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -43,3 +43,28 @@ class CustomFailureReport(Base):
     materials: Mapped[list | None] = mapped_column(JSON, nullable=True)
     filament_used_grams: Mapped[float | None] = mapped_column(Float, nullable=True)
     print_time_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)  # slicer estimate
+
+
+class CustomFailureReason(Base):
+    """A selectable reason for "Fehldruck melden" (default or user-created).
+
+    Reports store only ``code``, so editing, hiding or re-ordering reasons never
+    changes existing reports. Default reasons (``is_system``) keep the codes
+    fail_reason_01..10; their title/subtitle come from the frontend translations
+    unless the user typed their own text here. Defaults are only ever hidden,
+    never deleted.
+    """
+
+    __tablename__ = "custom_failure_reasons"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    # NULL title/subtitle on a default reason = use the translated default text.
+    title: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    subtitle: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    icon: Mapped[str | None] = mapped_column(String(50), nullable=True)  # built-in icon name
+    custom_icon_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)  # uploaded image
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

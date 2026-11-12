@@ -17,8 +17,8 @@ from backend.app.core.permissions import Permission
 from backend.app.models.archive import PrintArchive
 from backend.app.models.custom_failure_report import CustomFailureReport
 from backend.app.models.printer import Printer
+from backend.app.services.custom_failure_reasons import get_reason_by_code
 from backend.app.services.custom_failure_reports import (
-    CUSTOM_FAILURE_REASONS,
     apply_print_snapshot,
     clean_text,
     find_report_for_run,
@@ -100,8 +100,12 @@ class ReasonStatisticsResponse(BaseModel):
     reasons: list[ReasonStatistics]
 
 
-def _validate_reason(reason: str) -> None:
-    if reason not in CUSTOM_FAILURE_REASONS:
+async def _validate_reason(db: AsyncSession, reason: str, current: str | None = None) -> None:
+    """The reason must exist and be visible; a report may keep its current (meanwhile hidden) reason."""
+    if reason == current:
+        return
+    configured = await get_reason_by_code(db, reason)
+    if not configured or configured.is_hidden:
         raise HTTPException(400, f"Unknown failure reason '{reason}'")
 
 
@@ -115,12 +119,6 @@ async def _get_printer(db: AsyncSession, printer_id: int) -> Printer:
 def _printer_state(printer_id: int) -> str | None:
     status = printer_manager.get_status(printer_id)
     return getattr(status, "state", None) if status else None
-
-
-@router.get("/reasons", response_model=list[str])
-async def get_reasons(_=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ)):
-    """Selectable reason codes, in display order."""
-    return CUSTOM_FAILURE_REASONS
 
 
 @router.get("/printers/{printer_id}/target", response_model=ReportTargetResponse)
@@ -159,7 +157,6 @@ async def create_report(
     db: AsyncSession = Depends(get_db),
 ):
     """Flag a print run with a reason. Reporting the same run again updates its report."""
-    _validate_reason(data.custom_failure_reason)
     printer = await _get_printer(db, data.printer_id)
     archive = (
         await db.execute(
@@ -169,7 +166,9 @@ async def create_report(
     if not archive:
         raise HTTPException(404, "Print not found for this printer")
 
-    report = await find_report_for_run(db, archive) or CustomFailureReport()
+    existing = await find_report_for_run(db, archive)
+    await _validate_reason(db, data.custom_failure_reason, existing.custom_failure_reason if existing else None)
+    report = existing or CustomFailureReport()
     apply_print_snapshot(report, archive, printer)
     report.custom_failure_reason = data.custom_failure_reason
     report.comment = clean_text(data.comment)
@@ -198,7 +197,7 @@ async def update_report(
     if "custom_failure_reason" in changes:
         if changes["custom_failure_reason"] is None:
             raise HTTPException(400, "A failure reason is required")
-        _validate_reason(changes["custom_failure_reason"])
+        await _validate_reason(db, changes["custom_failure_reason"], report.custom_failure_reason)
         report.custom_failure_reason = changes["custom_failure_reason"]
     if "comment" in changes:
         report.comment = clean_text(changes["comment"])

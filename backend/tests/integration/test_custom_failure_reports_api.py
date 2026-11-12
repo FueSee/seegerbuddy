@@ -31,13 +31,13 @@ async def _report(client: AsyncClient, printer_id: int, archive_id: int, reason:
 class TestReportTarget:
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_reasons_are_ten_placeholders(self, async_client: AsyncClient):
-        response = await async_client.get(f"{API}/reasons")
+    async def test_ten_default_reasons_exist(self, async_client: AsyncClient):
+        response = await async_client.get(f"{API}/reasons/")
         assert response.status_code == 200
-        reasons = response.json()
-        assert reasons[0] == "fail_reason_01"
-        assert reasons[-1] == "fail_reason_10"
-        assert len(reasons) == 10
+        codes = [r["code"] for r in response.json()]
+        assert codes == [f"fail_reason_{i:02d}" for i in range(1, 12)]
+        assert all(r["is_system"] and r["title"] is None for r in response.json())
+        assert response.json()[0]["icon"] == "Ban"  # default icon comes from code until one is picked
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -214,7 +214,7 @@ class TestStatistics:
         top, second = stats["reasons"][0], stats["reasons"][1]
         assert (top["reason"], top["count"], top["percent"]) == ("fail_reason_08", 17, 85.0)
         assert (second["reason"], second["count"], second["percent"]) == ("fail_reason_02", 3, 15.0)
-        assert len(stats["reasons"]) == 10  # every configured reason is listed, also with 0
+        assert len(stats["reasons"]) == 11  # every configured reason is listed, also with 0
         assert len(top["latest"]) == 15
         assert top["latest"][0]["print_name"] == "Part 16"  # newest first
 
