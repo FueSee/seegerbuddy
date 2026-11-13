@@ -33,8 +33,13 @@ DEFAULT_REASONS: list[dict] = [
     {"code": "fail_reason_08", "icon": "Shuffle"},  # tangled filament
     {"code": "fail_reason_09", "icon": "Sparkles"},  # missing maintenance
     {"code": "fail_reason_10", "icon": "Eye"},  # poor print quality
-    {"code": "fail_reason_11", "icon": "CircleHelp"},  # other
+    {"code": "fail_reason_12", "icon": "Spline"},  # spaghetti / part detached
+    {"code": "fail_reason_13", "icon": "Cable"},  # feeding / AMS problem
+    {"code": "fail_reason_14", "icon": "Construction"},  # print preparation error
+    {"code": "fail_reason_11", "icon": "CircleHelp"},  # other (kept last)
 ]
+# "Other" stays the last default; reasons added in later versions go in front of it.
+LAST_DEFAULT_CODE = "fail_reason_11"
 DEFAULT_CODES = [r["code"] for r in DEFAULT_REASONS]
 # Default reasons store icon=NULL until someone picks one, so changing an icon here
 # also reaches installations that already exist.
@@ -60,13 +65,29 @@ class InvalidIconImage(Exception):
 
 async def ensure_default_reasons(db: AsyncSession) -> None:
     """Create any missing default reason (first start, or after an upgrade)."""
-    existing = set((await db.execute(select(CustomFailureReason.code))).scalars().all())
+    existing = {reason.code: reason for reason in (await db.execute(select(CustomFailureReason))).scalars().all()}
     missing = [r for r in DEFAULT_REASONS if r["code"] not in existing]
     if not missing:
         return
-    for index, definition in enumerate(DEFAULT_REASONS, start=1):
-        if definition in missing:
+    if not existing:
+        # First start: the list order is the display order.
+        for index, definition in enumerate(DEFAULT_REASONS, start=1):
             db.add(CustomFailureReason(code=definition["code"], icon=None, is_system=True, sort_order=index))
+    else:
+        # Upgrade: new defaults go right before "Other" (or at the end if it's gone),
+        # everything from "Other" on moves down. The user's own order stays otherwise.
+        last = existing.get(LAST_DEFAULT_CODE)
+        if last is not None:
+            insert_at = last.sort_order
+            for reason in existing.values():
+                if reason.sort_order >= insert_at:
+                    reason.sort_order += len(missing)
+        else:
+            insert_at = max(r.sort_order for r in existing.values()) + 1
+        for offset, definition in enumerate(missing):
+            db.add(
+                CustomFailureReason(code=definition["code"], icon=None, is_system=True, sort_order=insert_at + offset)
+            )
     try:
         await db.commit()
     except IntegrityError:

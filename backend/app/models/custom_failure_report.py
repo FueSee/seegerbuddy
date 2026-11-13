@@ -44,13 +44,28 @@ class CustomFailureReport(Base):
     filament_used_grams: Mapped[float | None] = mapped_column(Float, nullable=True)
     print_time_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)  # slicer estimate
 
+    # Where the report comes from:
+    #   "manual"   - a person picked the reason ("Fehldruck melden", or changed an imported one)
+    #   "auto"     - derived from what PrintBuddy recorded automatically (HMS code / automatic text)
+    #   "imported" - taken over from a reason a person set in PrintBuddy's Edit Archive dialog
+    source: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual")
+    # What PrintBuddy had recorded (failure_reason text) and the Bambu HMS code, if known.
+    original_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hms_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The print log entry this report was imported from / linked to (one report per entry).
+    # No foreign key on purpose: the print log can be cleared without touching reports.
+    print_log_entry_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Withdrawn imported reports are kept as an invisible marker so the next sync
+    # doesn't bring them back. All lists and statistics skip these.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
 
 class CustomFailureReason(Base):
     """A selectable reason for "Fehldruck melden" (default or user-created).
 
     Reports store only ``code``, so editing, hiding or re-ordering reasons never
     changes existing reports. Default reasons (``is_system``) keep the codes
-    fail_reason_01..10; their title/subtitle come from the frontend translations
+    fail_reason_01..14; their title/subtitle come from the frontend translations
     unless the user typed their own text here. Defaults are only ever hidden,
     never deleted.
     """

@@ -1,11 +1,12 @@
 import { Fragment, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Pencil } from 'lucide-react';
 import { api } from '../api/client';
-import type { CustomFailureReasonStats, CustomFailureReport } from '../api/client';
+import type { CustomFailureReasonStats, CustomFailureReport, CustomFailureSourceFilter } from '../api/client';
 import { formatDuration } from '../utils/date';
 import { FailureReasonIcon } from './FailureReasonIcon';
+import { ReportFailureModal } from './ReportFailureModal';
 import {
   customFailureReasonTitle,
   formatGrams,
@@ -27,10 +28,12 @@ interface FailReasonStatisticsWidgetProps {
 export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStatisticsWidgetProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [source, setSource] = useState<CustomFailureSourceFilter | undefined>(undefined);
+  const [editing, setEditing] = useState<CustomFailureReport | null>(null);
 
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['customFailureStats', dateFrom, dateTo],
-    queryFn: () => api.getCustomFailureStats({ dateFrom, dateTo }),
+    queryKey: ['customFailureStats', dateFrom, dateTo, source],
+    queryFn: () => api.getCustomFailureStats({ dateFrom, dateTo, source }),
   });
   // Hidden reasons included: their earlier reports still show up here.
   const { data: reasons = [] } = useQuery({
@@ -45,8 +48,30 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
       </div>
     );
   }
+  // The filter only makes sense once automatically detected reports exist.
+  const showFilter = !!stats && (stats.automatic_total > 0 || source !== undefined);
+  const filter = showFilter && (
+    <label className="inline-flex items-center gap-2 text-xs text-bambu-gray">
+      {t('customFailure.widget.sourceFilter')}
+      <select
+        value={source ?? ''}
+        onChange={(e) => setSource((e.target.value || undefined) as CustomFailureSourceFilter | undefined)}
+        className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs focus:border-bambu-green focus:outline-none"
+      >
+        <option value="">{t('customFailure.widget.sourceAll')}</option>
+        <option value="person">{t('customFailure.widget.sourcePerson')}</option>
+        <option value="automatic">{t('customFailure.widget.sourceAutomatic')}</option>
+      </select>
+    </label>
+  );
+
   if (!stats || stats.total === 0) {
-    return <p className="text-bambu-gray text-center py-4">{t('customFailure.widget.noReports')}</p>;
+    return (
+      <div>
+        {filter && <div className="flex justify-end mb-2">{filter}</div>}
+        <p className="text-bambu-gray text-center py-4">{t('customFailure.widget.noReports')}</p>
+      </div>
+    );
   }
 
   const toggle = (reason: string) =>
@@ -59,7 +84,15 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
 
   return (
     <div className="overflow-x-auto">
-      <p className="text-xs text-bambu-gray mb-2">{t('customFailure.widget.totalReports', { count: stats.total })}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <p className="text-xs text-bambu-gray">
+          {t('customFailure.widget.totalReports', { count: stats.total })}
+          {source === undefined && stats.automatic_total > 0 && (
+            <> · {t('customFailure.widget.automaticCount', { count: stats.automatic_total })}</>
+          )}
+        </p>
+        {filter}
+      </div>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-bambu-gray border-b border-bambu-dark-tertiary">
@@ -97,7 +130,13 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
                 {isOpen && (
                   <tr>
                     <td colSpan={3} className="pb-3 pl-5">
-                      <AffectedPrints row={row} dateFrom={dateFrom} dateTo={dateTo} />
+                      <AffectedPrints
+                        row={row}
+                        dateFrom={dateFrom}
+                        dateTo={dateTo}
+                        source={source}
+                        onEdit={setEditing}
+                      />
                     </td>
                   </tr>
                 )}
@@ -106,6 +145,7 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
           })}
         </tbody>
       </table>
+      {editing && <ReportFailureModal report={editing} onClose={() => setEditing(null)} />}
     </div>
   );
 }
@@ -114,17 +154,21 @@ function AffectedPrints({
   row,
   dateFrom,
   dateTo,
+  source,
+  onEdit,
 }: {
   row: CustomFailureReasonStats;
   dateFrom?: string;
   dateTo?: string;
+  source?: CustomFailureSourceFilter;
+  onEdit: (report: CustomFailureReport) => void;
 }) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
 
   const { data: all, isLoading } = useQuery({
-    queryKey: ['customFailureReports', row.reason, dateFrom, dateTo],
-    queryFn: () => api.getCustomFailureReports({ reason: row.reason, dateFrom, dateTo }),
+    queryKey: ['customFailureReports', row.reason, dateFrom, dateTo, source],
+    queryFn: () => api.getCustomFailureReports({ reason: row.reason, dateFrom, dateTo, source }),
     enabled: showAll,
   });
 
@@ -142,15 +186,16 @@ function AffectedPrints({
           <th className="py-1 px-2 font-medium text-right whitespace-nowrap">{t('customFailure.widget.colTime')}</th>
           <th className="py-1 px-2 font-medium">{t('customFailure.widget.colPrintName')}</th>
           <th className="py-1 pl-2 font-medium">{t('customFailure.widget.colComment')}</th>
+          <th className="py-1 pl-2 w-6" />
         </tr>
       </thead>
       <tbody>
         {entries.map((report) => (
-          <AffectedPrintRow key={report.id} report={report} />
+          <AffectedPrintRow key={report.id} report={report} onEdit={onEdit} />
         ))}
         {!showAll && hiddenCount > 0 && (
           <tr>
-            <td colSpan={7} className="py-1">
+            <td colSpan={8} className="py-1">
               <button
                 type="button"
                 className="italic text-bambu-green hover:underline"
@@ -163,7 +208,7 @@ function AffectedPrints({
         )}
         {showAll && isLoading && (
           <tr>
-            <td colSpan={7} className="py-1">
+            <td colSpan={8} className="py-1">
               <Loader2 className="w-4 h-4 text-bambu-green animate-spin" />
             </td>
           </tr>
@@ -173,7 +218,29 @@ function AffectedPrints({
   );
 }
 
-function AffectedPrintRow({ report }: { report: CustomFailureReport }) {
+function SourceBadge({ report }: { report: CustomFailureReport }) {
+  const { t } = useTranslation();
+  if (report.source === 'manual') return null;
+  const automatic = report.source === 'auto';
+  const details = [
+    automatic ? t('customFailure.widget.badgeAutoTitle') : t('customFailure.widget.badgeImportedTitle'),
+    report.original_reason && t('customFailure.modal.printbuddyRecorded', { text: report.original_reason }),
+    report.hms_code &&
+      t('customFailure.modal.printerError', { code: report.hms_code, description: report.hms_description ?? '' }),
+  ].filter(Boolean);
+  return (
+    <span
+      className={`inline-block px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap ${
+        automatic ? 'bg-yellow-500/20 text-yellow-300' : 'bg-blue-500/20 text-blue-300'
+      }`}
+      title={details.join('\n')}
+    >
+      {automatic ? t('customFailure.widget.badgeAuto') : t('customFailure.widget.badgeImported')}
+    </span>
+  );
+}
+
+function AffectedPrintRow({ report, onEdit }: { report: CustomFailureReport; onEdit: (r: CustomFailureReport) => void }) {
   const { t } = useTranslation();
   const grams = totalMaterialGrams(report.materials, report.filament_used_grams);
   const multiMaterial = report.materials.length > 1;
@@ -226,10 +293,22 @@ function AffectedPrintRow({ report }: { report: CustomFailureReport }) {
         </span>
       </td>
       <td className="py-1 pl-2 text-bambu-gray">
+        <SourceBadge report={report} />
         {report.comment && <div className="whitespace-pre-line">{report.comment}</div>}
         {report.reported_by && (
           <div className="italic">{t('customFailure.widget.reportedByLabel', { name: report.reported_by })}</div>
         )}
+      </td>
+      <td className="py-1 pl-2">
+        <button
+          type="button"
+          onClick={() => onEdit(report)}
+          className="p-1 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white"
+          aria-label={t('customFailure.widget.edit')}
+          title={t('customFailure.widget.edit')}
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
       </td>
     </tr>
   );

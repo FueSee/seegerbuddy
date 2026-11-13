@@ -2761,6 +2761,21 @@ async def run_migrations(conn):
     # file metadata so the FileManager displays the filename, not the title (#1489).
     await _migrate_drop_library_print_name(conn)
 
+    # Seeger fork: "Fehldruck melden" reports can be imported from PrintBuddy's
+    # failure history (source, original text, HMS code, link to the log entry).
+    await _safe_execute(
+        conn, "ALTER TABLE custom_failure_reports ADD COLUMN source VARCHAR(20) DEFAULT 'manual' NOT NULL"
+    )
+    await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN original_reason VARCHAR(255)")
+    await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN hms_code VARCHAR(20)")
+    await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN print_log_entry_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN dismissed_at TIMESTAMP")
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_custom_failure_reports_print_log_entry_id "
+        "ON custom_failure_reports (print_log_entry_id)",
+    )
+
 
 def _repair_default_notification_template(existing_template, template_data: dict) -> bool:
     """Repair app-owned default notification wording without clobbering custom templates."""

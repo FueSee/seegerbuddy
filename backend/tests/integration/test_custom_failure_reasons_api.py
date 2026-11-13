@@ -65,7 +65,7 @@ class TestManageReasons:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_limit_of_100_reasons(self, async_client):
-        for i in range(89):  # 11 defaults + 89 custom = 100
+        for i in range(86):  # 14 defaults + 86 custom = 100
             assert (await async_client.post(f"{API}/reasons/", json={"title": f"R{i}"})).status_code == 200
         response = await async_client.post(f"{API}/reasons/", json={"title": "one too many"})
         assert response.status_code == 400
@@ -86,7 +86,7 @@ class TestManageReasons:
         stats = (await async_client.get(f"{API}/stats")).json()
         assert stats["total"] == 1
         assert stats["reasons"][0]["reason"] == "fail_reason_06"
-        assert len(stats["reasons"]) == 11
+        assert len(stats["reasons"]) == 14
 
         # New reports can't pick it, but the existing report may keep it when edited.
         other = await archive_factory(printer.id, started_at=datetime(2026, 11, 4, 9, 0))
@@ -111,7 +111,7 @@ class TestManageReasons:
         await async_client.delete(f"{API}/reasons/{reason_id}")
         stats = (await async_client.get(f"{API}/stats")).json()
         assert "fail_reason_09" not in [r["reason"] for r in stats["reasons"]]
-        assert len(stats["reasons"]) == 10
+        assert len(stats["reasons"]) == 13
 
     @pytest.mark.asyncio
     @pytest.mark.integration

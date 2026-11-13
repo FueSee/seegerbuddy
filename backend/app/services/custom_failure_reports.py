@@ -13,11 +13,18 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.custom_failure_report import CustomFailureReport
 from backend.app.models.printer import Printer
 from backend.app.services.custom_failure_reasons import list_reasons
+from backend.app.services.hms_errors import get_error_description
 
 # How many prints per reason the statistics show before "show all (N)".
 LATEST_ENTRIES_PER_REASON = 15
 
 ACTIVE_PRINTER_STATES = {"RUNNING", "PAUSE"}
+
+# Statistics filter: who decided the reason.
+#   "person"    - reported via "Fehldruck melden" or picked in PrintBuddy's Edit Archive dialog
+#   "automatic" - derived from what the printer / PrintBuddy recorded, not confirmed by anyone
+PERSON_SOURCES = ("manual", "imported")
+AUTOMATIC_SOURCES = ("auto",)
 
 
 async def find_target_archive(db: AsyncSession, printer_id: int, printer_state: str | None) -> PrintArchive | None:
@@ -35,9 +42,13 @@ async def find_target_archive(db: AsyncSession, printer_id: int, printer_state: 
     return result.scalar_one_or_none()
 
 
-async def find_report_for_run(db: AsyncSession, archive: PrintArchive) -> CustomFailureReport | None:
+async def find_report_for_run(
+    db: AsyncSession, archive: PrintArchive, include_dismissed: bool = False
+) -> CustomFailureReport | None:
     """A print run is identified by its archive plus the run's start time (reprints reuse the archive)."""
     query = select(CustomFailureReport).where(CustomFailureReport.archive_id == archive.id)
+    if not include_dismissed:
+        query = query.where(CustomFailureReport.dismissed_at.is_(None))
     if archive.started_at is not None:
         query = query.where(CustomFailureReport.print_started_at == archive.started_at)
     result = await db.execute(query.order_by(CustomFailureReport.id.desc()).limit(1))
@@ -100,8 +111,12 @@ def _print_date_column():
     return func.coalesce(CustomFailureReport.print_started_at, CustomFailureReport.reported_at)
 
 
-def _date_filters(date_from: date | None, date_to: date | None) -> list:
-    filters = []
+def _date_filters(date_from: date | None, date_to: date | None, source: str | None = None) -> list:
+    filters = [CustomFailureReport.dismissed_at.is_(None)]
+    if source == "person":
+        filters.append(CustomFailureReport.source.in_(PERSON_SOURCES))
+    elif source == "automatic":
+        filters.append(CustomFailureReport.source.in_(AUTOMATIC_SOURCES))
     if date_from:
         filters.append(_print_date_column() >= datetime.combine(date_from, time.min))
     if date_to:
@@ -115,12 +130,13 @@ async def list_reports(
     date_from: date | None = None,
     date_to: date | None = None,
     limit: int | None = None,
+    source: str | None = None,
 ) -> list[dict]:
     """Reports newest print first, with whether the archive still has a thumbnail."""
     query = (
         select(CustomFailureReport, PrintArchive.thumbnail_path, PrintArchive.deleted_at)
         .outerjoin(PrintArchive, PrintArchive.id == CustomFailureReport.archive_id)
-        .where(*_date_filters(date_from, date_to))
+        .where(*_date_filters(date_from, date_to, source))
         .order_by(_print_date_column().desc(), CustomFailureReport.id.desc())
     )
     if reason:
@@ -153,10 +169,16 @@ def report_to_dict(report: CustomFailureReport, has_thumbnail: bool = False) -> 
         "filament_used_grams": report.filament_used_grams,
         "print_time_seconds": report.print_time_seconds,
         "has_thumbnail": has_thumbnail,
+        "source": report.source or "manual",
+        "original_reason": report.original_reason,
+        "hms_code": report.hms_code,
+        "hms_description": get_error_description(report.hms_code) if report.hms_code else None,
     }
 
 
-async def reason_statistics(db: AsyncSession, date_from: date | None = None, date_to: date | None = None) -> dict:
+async def reason_statistics(
+    db: AsyncSession, date_from: date | None = None, date_to: date | None = None, source: str | None = None
+) -> dict:
     """Count and share per reason, plus the latest prints for each.
 
     Every visible reason is listed (also with 0 reports), plus any reason code
@@ -164,11 +186,18 @@ async def reason_statistics(db: AsyncSession, date_from: date | None = None, dat
     """
     result = await db.execute(
         select(CustomFailureReport.custom_failure_reason, func.count(CustomFailureReport.id))
-        .where(*_date_filters(date_from, date_to))
+        .where(*_date_filters(date_from, date_to, source))
         .group_by(CustomFailureReport.custom_failure_reason)
     )
     counts = dict(result.all())
     total = sum(counts.values())
+    automatic_total = (
+        await db.execute(
+            select(func.count(CustomFailureReport.id)).where(
+                *_date_filters(date_from, date_to), CustomFailureReport.source.in_(AUTOMATIC_SOURCES)
+            )
+        )
+    ).scalar_one()
 
     configured = [reason.code for reason in await list_reasons(db, include_hidden=True)]
     visible = {reason.code for reason in await list_reasons(db)}
@@ -184,7 +213,12 @@ async def reason_statistics(db: AsyncSession, date_from: date | None = None, dat
                 "percent": round(count / total * 100, 1) if total else 0.0,
                 "latest": (
                     await list_reports(
-                        db, reason=code, date_from=date_from, date_to=date_to, limit=LATEST_ENTRIES_PER_REASON
+                        db,
+                        reason=code,
+                        date_from=date_from,
+                        date_to=date_to,
+                        limit=LATEST_ENTRIES_PER_REASON,
+                        source=source,
                     )
                     if count
                     else []
@@ -193,7 +227,13 @@ async def reason_statistics(db: AsyncSession, date_from: date | None = None, dat
         )
     # Most frequent first; ties keep the configured order.
     reasons.sort(key=lambda r: -r["count"])
-    return {"total": total, "latest_limit": LATEST_ENTRIES_PER_REASON, "reasons": reasons}
+    return {
+        "total": total,
+        # Across all sources (ignores the source filter), so the UI knows whether to offer the filter.
+        "automatic_total": automatic_total,
+        "latest_limit": LATEST_ENTRIES_PER_REASON,
+        "reasons": reasons,
+    }
 
 
 def clean_text(value: str | None) -> str | None:
