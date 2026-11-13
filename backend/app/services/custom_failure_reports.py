@@ -173,6 +173,7 @@ def report_to_dict(report: CustomFailureReport, has_thumbnail: bool = False) -> 
         "original_reason": report.original_reason,
         "hms_code": report.hms_code,
         "hms_description": get_error_description(report.hms_code) if report.hms_code else None,
+        "progress_percent": report.progress_percent,
     }
 
 

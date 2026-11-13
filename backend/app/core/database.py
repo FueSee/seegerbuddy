@@ -2770,6 +2770,7 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN hms_code VARCHAR(20)")
     await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN print_log_entry_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN dismissed_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE custom_failure_reports ADD COLUMN progress_percent FLOAT")
     await _safe_execute(
         conn,
         "CREATE INDEX IF NOT EXISTS ix_custom_failure_reports_print_log_entry_id "

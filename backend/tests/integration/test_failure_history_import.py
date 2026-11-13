@@ -296,3 +296,55 @@ class TestNewDefaults:
 
         codes = [r["code"] for r in (await async_client.get(f"{API}/reasons/")).json()]
         assert codes[-5:] == ["fail_reason_12", "fail_reason_13", "fail_reason_14", "fail_reason_11", "custom_abc"]
+
+
+class TestStoppedAtProgress:
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_progress_recorded_at_print_end_reaches_imported_report(
+        self, async_client, printer_factory, archive_factory, db_session
+    ):
+        from backend.app.services.failure_progress import record_run_progress
+
+        printer = await printer_factory(name="P1S Links")
+        archive = await _failed(archive_factory, printer.id, 1, failure_reason="Clogged nozzle")
+        old = await _failed(archive_factory, printer.id, 2)  # ended before this feature existed
+        with patch("backend.app.services.printer_manager.printer_manager.get_status", return_value=None):
+            # Bambu sends the last valid progress before the firmware resets it.
+            await record_run_progress(db_session, printer.id, archive.id, {"status": "failed", "last_progress": 37})
+            # Completed prints are not recorded.
+            await record_run_progress(db_session, printer.id, old.id, {"status": "completed", "progress": 100})
+
+        reports = {r["archive_id"]: r for r in (await async_client.get(f"{API}/")).json()}
+        assert reports[archive.id]["progress_percent"] == 37.0
+        assert reports[old.id]["progress_percent"] is None  # unknown -> shown as "–"
+
+    def test_klipper_progress_and_live_fallback(self):
+        from backend.app.services.failure_progress import progress_from_completion
+
+        assert progress_from_completion({"progress": 62.46})[0] == 62.5
+        live = SimpleNamespace(progress=12, layer_num=30, total_layers=200)
+        assert progress_from_completion({"last_progress": 0}, live) == (12.0, 30, 200)
+        assert progress_from_completion({"progress": "nonsense"})[0] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_manual_report_progress(self, async_client, printer_factory, archive_factory):
+        printer = await printer_factory(name="X1C")
+        finished = await archive_factory(printer.id, status="completed", started_at=START)
+        response = await async_client.post(
+            f"{API}/",
+            json={"printer_id": printer.id, "archive_id": finished.id, "custom_failure_reason": "fail_reason_10"},
+        )
+        assert response.json()["progress_percent"] == 100.0  # ran to the end, but looks bad
+
+        running = await archive_factory(printer.id, status="printing", started_at=START + timedelta(hours=5))
+        with patch(
+            "backend.app.api.routes.custom_failure_reports.printer_manager.get_status",
+            return_value=SimpleNamespace(state="RUNNING", progress=48, hms_errors=[]),
+        ):
+            response = await async_client.post(
+                f"{API}/",
+                json={"printer_id": printer.id, "archive_id": running.id, "custom_failure_reason": "fail_reason_12"},
+            )
+        assert response.json()["progress_percent"] == 48.0

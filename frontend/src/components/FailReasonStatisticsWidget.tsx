@@ -184,6 +184,7 @@ function AffectedPrints({
           <th className="py-1 px-2 font-medium">{t('customFailure.widget.colMaterial')}</th>
           <th className="py-1 px-2 font-medium text-right whitespace-nowrap">{t('customFailure.widget.colAmount')}</th>
           <th className="py-1 px-2 font-medium text-right whitespace-nowrap">{t('customFailure.widget.colTime')}</th>
+          <th className="py-1 px-2 font-medium text-right whitespace-nowrap">{t('customFailure.widget.colStoppedAt')}</th>
           <th className="py-1 px-2 font-medium">{t('customFailure.widget.colPrintName')}</th>
           <th className="py-1 pl-2 font-medium">{t('customFailure.widget.colComment')}</th>
           <th className="py-1 pl-2 w-6" />
@@ -195,7 +196,7 @@ function AffectedPrints({
         ))}
         {!showAll && hiddenCount > 0 && (
           <tr>
-            <td colSpan={8} className="py-1">
+            <td colSpan={9} className="py-1">
               <button
                 type="button"
                 className="italic text-bambu-green hover:underline"
@@ -208,7 +209,7 @@ function AffectedPrints({
         )}
         {showAll && isLoading && (
           <tr>
-            <td colSpan={8} className="py-1">
+            <td colSpan={9} className="py-1">
               <Loader2 className="w-4 h-4 text-bambu-green animate-spin" />
             </td>
           </tr>
@@ -278,6 +279,9 @@ function AffectedPrintRow({ report, onEdit }: { report: CustomFailureReport; onE
       <td className="py-1 px-2 text-right whitespace-nowrap">{formatGrams(grams)}</td>
       <td className="py-1 px-2 text-right whitespace-nowrap">
         {report.print_time_seconds != null ? formatDuration(report.print_time_seconds) : '–'}
+      </td>
+      <td className="py-1 px-2 text-right whitespace-nowrap">
+        {report.progress_percent != null ? `${Math.round(report.progress_percent)} %` : '–'}
       </td>
       <td className="py-1 px-2">
         <span className="inline-flex items-center gap-2" title={report.filename ?? undefined}>

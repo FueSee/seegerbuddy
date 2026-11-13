@@ -66,6 +66,7 @@ function buildReport(id: number, overrides: Partial<CustomFailureReport> = {}): 
     original_reason: null,
     hms_code: null,
     hms_description: null,
+    progress_percent: null,
     ...overrides,
   };
 }
@@ -355,7 +356,7 @@ describe('Failure history import', () => {
 
   it('changes a reason from the statistics via the pencil', async () => {
     useReasons();
-    const auto = buildReport(9, { source: 'auto', custom_failure_reason: 'fail_reason_02', original_reason: 'Warping' });
+    const auto = buildReport(9, { source: 'auto', custom_failure_reason: 'fail_reason_02', original_reason: 'Warping', progress_percent: 37.4 });
     server.use(
       http.get(`${API}/stats`, () =>
         HttpResponse.json({
@@ -380,6 +381,8 @@ describe('Failure history import', () => {
     expect(screen.getByLabelText('Source')).toBeInTheDocument();
     await user.click(screen.getByText('Warping'));
     expect(screen.getByText('automatic')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Stopped/Failed at' })).toBeInTheDocument();
+    expect(screen.getByText('37 %')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Change or confirm reason' }));
 
     expect(await screen.findByText('Edit failed print')).toBeInTheDocument();

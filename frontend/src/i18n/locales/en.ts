@@ -5991,6 +5991,7 @@ export default {
       colMaterial: 'Material',
       colAmount: 'Material (est.)',
       colTime: 'Print time (est.)',
+      colStoppedAt: 'Stopped/Failed at',
       colPrintName: 'Print name',
       colComment: 'Comment',
       showAll: 'Show all ({{count}})',

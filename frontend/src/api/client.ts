@@ -3423,6 +3423,8 @@ export interface CustomFailureReport {
   original_reason: string | null;
   hms_code: string | null;
   hms_description: string | null;
+  /** how far the print got when it stopped / failed (0-100); null = unknown */
+  progress_percent: number | null;
 }
 
 export type CustomFailureSource = 'manual' | 'auto' | 'imported';

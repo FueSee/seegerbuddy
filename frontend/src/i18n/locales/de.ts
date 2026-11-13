@@ -5979,6 +5979,7 @@ export default {
       colMaterial: 'Material',
       colAmount: 'Material (geschätzt)',
       colTime: 'Druckzeit (geschätzt)',
+      colStoppedAt: 'Gestoppt/Fehler bei',
       colPrintName: 'Druckname',
       colComment: 'Kommentar',
       showAll: 'Alle anzeigen ({{count}})',
