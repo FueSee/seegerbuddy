@@ -348,3 +348,21 @@ class TestStoppedAtProgress:
                 json={"printer_id": printer.id, "archive_id": running.id, "custom_failure_reason": "fail_reason_12"},
             )
         assert response.json()["progress_percent"] == 48.0
+
+
+class TestPrinterFilter:
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_statistics_and_list_for_one_printer(self, async_client, printer_factory, archive_factory):
+        left = await printer_factory(name="P1S Links")
+        right = await printer_factory(name="P1S Rechts")
+        await _failed(archive_factory, left.id, 1, failure_reason="Clogged nozzle")
+        await _failed(archive_factory, left.id, 2, failure_reason="Warping")
+        await _failed(archive_factory, right.id, 3, failure_reason="Clogged nozzle")
+
+        assert _counts(await _stats(async_client)) == {"fail_reason_01": 2, "fail_reason_02": 1}
+        stats = await _stats(async_client, printer_id=left.id)
+        assert _counts(stats) == {"fail_reason_01": 1, "fail_reason_02": 1}
+        assert stats["automatic_total"] == 1  # follows the printer filter too
+        listed = (await async_client.get(f"{API}/", params={"printer_id": right.id})).json()
+        assert [r["printer_name"] for r in listed] == ["P1S Rechts"]

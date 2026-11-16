@@ -98,11 +98,11 @@ def _snapshot(
     report: CustomFailureReport,
     entry: PrintLogEntry,
     archive: PrintArchive | None,
-    printer_exists: bool,
+    printer_name: str | None,
 ) -> None:
-    report.printer_id = entry.printer_id if printer_exists else None
+    report.printer_id = entry.printer_id if printer_name is not None else None
     report.archive_id = archive.id if archive else None
-    report.printer_name = entry.printer_name
+    report.printer_name = entry.printer_name or printer_name
     report.print_name = entry.print_name or (archive.print_name if archive else None)
     report.filename = archive.filename if archive else None
     report.print_status = entry.status
@@ -159,7 +159,7 @@ async def _sync(db: AsyncSession) -> dict:
             )
         ).scalars():
             queue_by_archive.setdefault(item.archive_id, []).append(item)
-    printer_ids = set((await db.execute(select(Printer.id))).scalars().all())
+    printer_names = dict((await db.execute(select(Printer.id, Printer.name))).all())
     progress = await progress_by_run(db, archive_ids)
 
     changed = False
@@ -225,7 +225,7 @@ async def _sync(db: AsyncSession) -> dict:
             print_log_entry_id=entry.id,
             progress_percent=run_progress,
         )
-        _snapshot(report, entry, archives.get(entry.archive_id), entry.printer_id in printer_ids)
+        _snapshot(report, entry, archives.get(entry.archive_id), printer_names.get(entry.printer_id))
         db.add(report)
         counts["created"] += 1
         changed = True

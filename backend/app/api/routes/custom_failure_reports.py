@@ -305,12 +305,13 @@ async def get_statistics(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     source: Literal["person", "automatic"] | None = Query(default=None),
+    printer_id: int | None = Query(default=None),
     _=RequirePermissionIfAuthEnabled(Permission.ARCHIVES_READ),
     db: AsyncSession = Depends(get_db),
 ):
     """Per-reason counts and shares with the latest prints for "Fail reason statistics"."""
     await sync_failure_history(db)
-    return await reason_statistics(db, date_from=date_from, date_to=date_to, source=source)
+    return await reason_statistics(db, date_from=date_from, date_to=date_to, source=source, printer_id=printer_id)
 
 
 @router.get("/", response_model=list[CustomFailureReportResponse])
@@ -319,9 +320,12 @@ async def get_reports(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     source: Literal["person", "automatic"] | None = Query(default=None),
+    printer_id: int | None = Query(default=None),
     _=RequirePermissionIfAuthEnabled(Permission.ARCHIVES_READ),
     db: AsyncSession = Depends(get_db),
 ):
     """All reports (optionally for one reason), newest print first — used by "show all"."""
     await sync_failure_history(db)
-    return await list_reports(db, reason=reason, date_from=date_from, date_to=date_to, source=source)
+    return await list_reports(
+        db, reason=reason, date_from=date_from, date_to=date_to, source=source, printer_id=printer_id
+    )

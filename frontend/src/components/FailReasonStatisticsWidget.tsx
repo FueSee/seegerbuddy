@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Loader2, Pencil } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Pencil, X } from 'lucide-react';
 import { api } from '../api/client';
 import type { CustomFailureReasonStats, CustomFailureReport, CustomFailureSourceFilter } from '../api/client';
 import { formatDuration } from '../utils/date';
@@ -29,12 +29,16 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [source, setSource] = useState<CustomFailureSourceFilter | undefined>(undefined);
+  const [printerId, setPrinterId] = useState<number | undefined>(undefined);
   const [editing, setEditing] = useState<CustomFailureReport | null>(null);
 
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['customFailureStats', dateFrom, dateTo, source],
-    queryFn: () => api.getCustomFailureStats({ dateFrom, dateTo, source }),
+    queryKey: ['customFailureStats', dateFrom, dateTo, source, printerId],
+    queryFn: () => api.getCustomFailureStats({ dateFrom, dateTo, source, printerId }),
+    // Keep the table while a new filter loads, so the filters don't jump away.
+    placeholderData: (previous) => previous,
   });
+  const { data: printers = [] } = useQuery({ queryKey: ['printers'], queryFn: api.getPrinters });
   // Hidden reasons included: their earlier reports still show up here.
   const { data: reasons = [] } = useQuery({
     queryKey: ['customFailureReasons'],
@@ -48,27 +52,64 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
       </div>
     );
   }
-  // The filter only makes sense once automatically detected reports exist.
-  const showFilter = !!stats && (stats.automatic_total > 0 || source !== undefined);
-  const filter = showFilter && (
-    <label className="inline-flex items-center gap-2 text-xs text-bambu-gray">
-      {t('customFailure.widget.sourceFilter')}
-      <select
-        value={source ?? ''}
-        onChange={(e) => setSource((e.target.value || undefined) as CustomFailureSourceFilter | undefined)}
-        className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs focus:border-bambu-green focus:outline-none"
-      >
-        <option value="">{t('customFailure.widget.sourceAll')}</option>
-        <option value="person">{t('customFailure.widget.sourcePerson')}</option>
-        <option value="automatic">{t('customFailure.widget.sourceAutomatic')}</option>
-      </select>
-    </label>
+  const selectClass =
+    'px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs focus:border-bambu-green focus:outline-none';
+  // The source filter only makes sense once automatically detected reports exist.
+  const showSourceFilter = !!stats && (stats.automatic_total > 0 || source !== undefined);
+  const filtered = source !== undefined || printerId !== undefined;
+  const filter = (
+    <div className="flex flex-wrap items-center gap-3">
+      {printers.length > 0 && (
+        <label className="inline-flex items-center gap-2 text-xs text-bambu-gray">
+          {t('customFailure.widget.printerFilter')}
+          <select
+            value={printerId ?? ''}
+            onChange={(e) => setPrinterId(e.target.value ? Number(e.target.value) : undefined)}
+            className={selectClass}
+          >
+            <option value="">{t('customFailure.widget.printerAll')}</option>
+            {printers.map((printer) => (
+              <option key={printer.id} value={printer.id}>
+                {printer.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {showSourceFilter && (
+        <label className="inline-flex items-center gap-2 text-xs text-bambu-gray">
+          {t('customFailure.widget.sourceFilter')}
+          <select
+            value={source ?? ''}
+            onChange={(e) => setSource((e.target.value || undefined) as CustomFailureSourceFilter | undefined)}
+            className={selectClass}
+          >
+            <option value="">{t('customFailure.widget.sourceAll')}</option>
+            <option value="person">{t('customFailure.widget.sourcePerson')}</option>
+            <option value="automatic">{t('customFailure.widget.sourceAutomatic')}</option>
+          </select>
+        </label>
+      )}
+      {filtered && (
+        <button
+          type="button"
+          onClick={() => {
+            setSource(undefined);
+            setPrinterId(undefined);
+          }}
+          className="inline-flex items-center gap-1 text-xs text-bambu-green hover:underline"
+        >
+          <X className="w-3.5 h-3.5" />
+          {t('customFailure.widget.resetFilter')}
+        </button>
+      )}
+    </div>
   );
 
   if (!stats || stats.total === 0) {
     return (
       <div>
-        {filter && <div className="flex justify-end mb-2">{filter}</div>}
+        <div className="flex justify-end mb-2">{filter}</div>
         <p className="text-bambu-gray text-center py-4">{t('customFailure.widget.noReports')}</p>
       </div>
     );
@@ -135,6 +176,7 @@ export function FailReasonStatisticsWidget({ dateFrom, dateTo }: FailReasonStati
                         dateFrom={dateFrom}
                         dateTo={dateTo}
                         source={source}
+                        printerId={printerId}
                         onEdit={setEditing}
                       />
                     </td>
@@ -155,20 +197,22 @@ function AffectedPrints({
   dateFrom,
   dateTo,
   source,
+  printerId,
   onEdit,
 }: {
   row: CustomFailureReasonStats;
   dateFrom?: string;
   dateTo?: string;
   source?: CustomFailureSourceFilter;
+  printerId?: number;
   onEdit: (report: CustomFailureReport) => void;
 }) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
 
   const { data: all, isLoading } = useQuery({
-    queryKey: ['customFailureReports', row.reason, dateFrom, dateTo, source],
-    queryFn: () => api.getCustomFailureReports({ reason: row.reason, dateFrom, dateTo, source }),
+    queryKey: ['customFailureReports', row.reason, dateFrom, dateTo, source, printerId],
+    queryFn: () => api.getCustomFailureReports({ reason: row.reason, dateFrom, dateTo, source, printerId }),
     enabled: showAll,
   });
 

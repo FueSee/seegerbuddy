@@ -111,8 +111,12 @@ def _print_date_column():
     return func.coalesce(CustomFailureReport.print_started_at, CustomFailureReport.reported_at)
 
 
-def _date_filters(date_from: date | None, date_to: date | None, source: str | None = None) -> list:
+def _date_filters(
+    date_from: date | None, date_to: date | None, source: str | None = None, printer_id: int | None = None
+) -> list:
     filters = [CustomFailureReport.dismissed_at.is_(None)]
+    if printer_id is not None:
+        filters.append(CustomFailureReport.printer_id == printer_id)
     if source == "person":
         filters.append(CustomFailureReport.source.in_(PERSON_SOURCES))
     elif source == "automatic":
@@ -131,12 +135,13 @@ async def list_reports(
     date_to: date | None = None,
     limit: int | None = None,
     source: str | None = None,
+    printer_id: int | None = None,
 ) -> list[dict]:
     """Reports newest print first, with whether the archive still has a thumbnail."""
     query = (
         select(CustomFailureReport, PrintArchive.thumbnail_path, PrintArchive.deleted_at)
         .outerjoin(PrintArchive, PrintArchive.id == CustomFailureReport.archive_id)
-        .where(*_date_filters(date_from, date_to, source))
+        .where(*_date_filters(date_from, date_to, source, printer_id))
         .order_by(_print_date_column().desc(), CustomFailureReport.id.desc())
     )
     if reason:
@@ -178,7 +183,11 @@ def report_to_dict(report: CustomFailureReport, has_thumbnail: bool = False) -> 
 
 
 async def reason_statistics(
-    db: AsyncSession, date_from: date | None = None, date_to: date | None = None, source: str | None = None
+    db: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    source: str | None = None,
+    printer_id: int | None = None,
 ) -> dict:
     """Count and share per reason, plus the latest prints for each.
 
@@ -187,7 +196,7 @@ async def reason_statistics(
     """
     result = await db.execute(
         select(CustomFailureReport.custom_failure_reason, func.count(CustomFailureReport.id))
-        .where(*_date_filters(date_from, date_to, source))
+        .where(*_date_filters(date_from, date_to, source, printer_id))
         .group_by(CustomFailureReport.custom_failure_reason)
     )
     counts = dict(result.all())
@@ -195,7 +204,8 @@ async def reason_statistics(
     automatic_total = (
         await db.execute(
             select(func.count(CustomFailureReport.id)).where(
-                *_date_filters(date_from, date_to), CustomFailureReport.source.in_(AUTOMATIC_SOURCES)
+                *_date_filters(date_from, date_to, printer_id=printer_id),
+                CustomFailureReport.source.in_(AUTOMATIC_SOURCES),
             )
         )
     ).scalar_one()
@@ -220,6 +230,7 @@ async def reason_statistics(
                         date_to=date_to,
                         limit=LATEST_ENTRIES_PER_REASON,
                         source=source,
+                        printer_id=printer_id,
                     )
                     if count
                     else []
