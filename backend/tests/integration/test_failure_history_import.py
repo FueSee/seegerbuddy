@@ -1,4 +1,4 @@
-"""Tests for taking PrintBuddy's failure history over into "Fehldruck melden"."""
+"""Tests for taking Printbuddy's failure history over into "Report failed print"."""
 
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -10,10 +10,41 @@ from sqlalchemy import select
 from backend.app.models.custom_failure_report import CustomFailureReason, CustomFailureReport
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.services import failure_reason_mapping as mapping
+from backend.app.services.failure_history_import import run_failure_history_sync, sync_failure_history
 from backend.app.services.hms_errors import HMS_ERROR_DESCRIPTIONS
 
 API = "/api/v1/custom-failure-reports"
+
+
+@pytest.fixture(autouse=True)
+async def _seed_default_reasons(db_session):
+    """The app seeds the default reasons at startup (init_db), which the test client skips."""
+    from backend.app.services.custom_failure_reasons import ensure_default_reasons
+
+    await ensure_default_reasons(db_session)
+
+
 START = datetime(2026, 10, 5, 8, 0)
+
+
+class _SyncingClient:
+    """Runs the history sync before every GET, as startup / a finished print / an archive edit would."""
+
+    def __init__(self, client, db):
+        self._client = client
+        self._db = db
+
+    async def get(self, *args, **kwargs):
+        await sync_failure_history(self._db)
+        return await self._client.get(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+@pytest.fixture
+def async_client(async_client, db_session):
+    return _SyncingClient(async_client, db_session)
 
 
 def _printer_status(state: str = "IDLE", hms: list[tuple[int, str]] | None = None):
@@ -115,7 +146,7 @@ class TestHistoryImport:
         assert reports["Clogged nozzle"]["print_name"] == "Test Print"  # snapshot from log + archive
         assert reports["Clogged nozzle"]["print_time_seconds"] == 3600
 
-        # Running again creates nothing new; PrintBuddy's log is unchanged.
+        # Running again creates nothing new; Printbuddy's log is unchanged.
         assert (await _stats(async_client))["total"] == 4
         db_session.expire_all()
         after = [
@@ -294,6 +325,10 @@ class TestNewDefaults:
         db_session.add(CustomFailureReason(code="custom_abc", title="Eigener", is_system=False, sort_order=12))
         await db_session.commit()
 
+        # Restart: init_db seeds the missing defaults.
+        from backend.app.services.custom_failure_reasons import ensure_default_reasons
+
+        await ensure_default_reasons(db_session)
         codes = [r["code"] for r in (await async_client.get(f"{API}/reasons/")).json()]
         assert codes[-5:] == ["fail_reason_12", "fail_reason_13", "fail_reason_14", "fail_reason_11", "custom_abc"]
 
@@ -366,3 +401,48 @@ class TestPrinterFilter:
         assert stats["automatic_total"] == 1  # follows the printer filter too
         listed = (await async_client.get(f"{API}/", params={"printer_id": right.id})).json()
         assert [r["printer_name"] for r in listed] == ["P1S Rechts"]
+
+
+class TestSyncTriggers:
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_reads_do_not_import(self, async_client, printer_factory, archive_factory):
+        printer = await printer_factory(name="Read only")
+        await _failed(archive_factory, printer.id, 1, failure_reason="Clogged nozzle")
+        # Bypass the syncing wrapper: a plain read must not write anything.
+        response = await async_client._client.get(f"{API}/stats")
+        assert response.json()["total"] == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_editing_the_archive_reason_schedules_a_sync(self, async_client, printer_factory, archive_factory):
+        printer = await printer_factory(name="Edit")
+        archive = await _failed(archive_factory, printer.id, 1)
+        with patch("backend.app.services.failure_history_import.schedule_failure_history_sync") as schedule:
+            response = await async_client.patch(f"/api/v1/archives/{archive.id}", json={"failure_reason": "Warping"})
+        assert response.status_code == 200, response.text
+        schedule.assert_called_once_with("archive edited")
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_background_sync_never_raises(self):
+        with patch(
+            "backend.app.services.failure_history_import.sync_failure_history", side_effect=RuntimeError("boom")
+        ):
+            await run_failure_history_sync("test")  # logged, not raised
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_one_report_per_log_entry_is_enforced_by_the_database(
+        self, async_client, printer_factory, archive_factory, db_session
+    ):
+        from sqlalchemy.exc import IntegrityError
+
+        printer = await printer_factory(name="Unique")
+        await _failed(archive_factory, printer.id, 1, failure_reason="Clogged nozzle")
+        await sync_failure_history(db_session)
+        entry = (await db_session.execute(select(PrintLogEntry))).scalar_one()
+        db_session.add(CustomFailureReport(custom_failure_reason="fail_reason_01", print_log_entry_id=entry.id))
+        with pytest.raises(IntegrityError):
+            await db_session.commit()
+        await db_session.rollback()

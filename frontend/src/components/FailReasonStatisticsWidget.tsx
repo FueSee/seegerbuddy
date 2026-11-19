@@ -7,6 +7,7 @@ import type { CustomFailureReasonStats, CustomFailureReport, CustomFailureSource
 import { formatDuration } from '../utils/date';
 import { FailureReasonIcon } from './FailureReasonIcon';
 import { ReportFailureModal } from './ReportFailureModal';
+import { useAuth } from '../contexts/AuthContext';
 import {
   customFailureReasonTitle,
   formatGrams,
@@ -21,7 +22,7 @@ interface FailReasonStatisticsWidgetProps {
 }
 
 /**
- * "Fail reason statistics": user-reported failure reasons ("Fehldruck melden")
+ * "Fail reason statistics": user-reported failure reasons ("Report failed print")
  * per reason, expandable to the affected prints. Independent of the existing
  * Failure Analysis widget, which uses the automatic failure_reason.
  */
@@ -287,6 +288,8 @@ function SourceBadge({ report }: { report: CustomFailureReport }) {
 
 function AffectedPrintRow({ report, onEdit }: { report: CustomFailureReport; onEdit: (r: CustomFailureReport) => void }) {
   const { t } = useTranslation();
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('printers:control');
   const grams = totalMaterialGrams(report.materials, report.filament_used_grams);
   const multiMaterial = report.materials.length > 1;
 
@@ -348,15 +351,17 @@ function AffectedPrintRow({ report, onEdit }: { report: CustomFailureReport; onE
         )}
       </td>
       <td className="py-1 pl-2">
-        <button
-          type="button"
-          onClick={() => onEdit(report)}
-          className="p-1 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white"
-          aria-label={t('customFailure.widget.edit')}
-          title={t('customFailure.widget.edit')}
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </button>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(report)}
+            className="p-1 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white"
+            aria-label={t('customFailure.widget.edit')}
+            title={t('customFailure.widget.edit')}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
       </td>
     </tr>
   );

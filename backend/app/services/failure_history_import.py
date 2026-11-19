@@ -1,17 +1,17 @@
-"""Bring PrintBuddy's own failure history into "Fehldruck melden".
+"""Bring Printbuddy's own failure history into "Report failed print".
 
-Every print run PrintBuddy logged as "failed" or "aborted" becomes a report,
-with the reason translated by failure_reason_mapping. PrintBuddy's tables
+Every print run Printbuddy logged as "failed" or "aborted" becomes a report,
+with the reason translated by failure_reason_mapping. Printbuddy's tables
 (print_log_entries, print_archives, print_queue) are only read, never changed.
 
-The sync is idempotent and cheap, so it simply runs whenever reports are read
-(statistics, report lists, the pop-up). That way it also picks up new failures
-and reasons someone sets later in the Edit Archive dialog, without hooking into
-PrintBuddy's code.
+The sync is idempotent. It runs in the background once at startup, after each
+finished print (on_print_complete) and after a failure reason or status is
+changed in the Edit Archive dialog, never on a read request. A unique index on
+print_log_entry_id prevents duplicates even with several workers.
 
 Rules:
 * A run that a person already reported keeps the person's reason; the import only
-  links it and remembers PrintBuddy's text.
+  links it and remembers Printbuddy's text.
 * "User cancelled" and "Stale ..." are not failure causes -> not imported.
 * Failed runs without any known cause land in "unassigned".
 * A withdrawn imported report stays as an invisible marker (dismissed_at), so it
@@ -52,6 +52,8 @@ SOURCE_IMPORTED = "imported"
 QUEUE_MATCH_SECONDS = 3600
 
 _sync_lock = asyncio.Lock()
+# Keeps scheduled background syncs referenced until they finish.
+_background_tasks: set[asyncio.Task] = set()
 
 
 def classify_entry(failure_reason: str | None, status: str, hms_codes: list[str]) -> tuple[str | None, str, str | None]:
@@ -122,6 +124,24 @@ def _snapshot(
         report.print_time_seconds = entry.duration_seconds
 
 
+def schedule_failure_history_sync(trigger: str) -> None:
+    """Run the sync in the background (startup, print completed, archive edited)."""
+    task = asyncio.create_task(run_failure_history_sync(trigger))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def run_failure_history_sync(trigger: str) -> None:
+    """Sync with its own session; never raises, so callers' flows can't break."""
+    from backend.app.core.database import async_session
+
+    try:
+        async with async_session() as db:
+            await sync_failure_history(db)
+    except Exception as exc:  # e.g. another worker imported the same entry first
+        logger.warning("Failure history sync (%s) failed: %s", trigger, exc)
+
+
 async def sync_failure_history(db: AsyncSession) -> dict:
     """Create / update reports from the print log. Returns counts (for logs and tests)."""
     async with _sync_lock:
@@ -172,6 +192,7 @@ async def _sync(db: AsyncSession) -> dict:
         report = by_entry.get(entry.id)
         if report is not None and not _same_run(report, entry):
             report.print_log_entry_id = None  # stale link from a cleared log
+            await db.flush()  # free the id before a new report takes it (unique index)
             report = None
             changed = True
         if report is None and entry.archive_id is not None:
@@ -189,7 +210,7 @@ async def _sync(db: AsyncSession) -> dict:
                 report.progress_percent = run_progress
                 changed = True
             if report.source == SOURCE_MANUAL:
-                # A person decided; only remember what PrintBuddy had recorded.
+                # A person decided; only remember what Printbuddy had recorded.
                 if report.original_reason != original or (hms_code and report.hms_code != hms_code):
                     report.original_reason = original
                     report.hms_code = hms_code or report.hms_code

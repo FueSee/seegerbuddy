@@ -1,4 +1,4 @@
-"""Selectable reasons for "Fehldruck melden": defaults, custom reasons, icons.
+"""Selectable reasons for "Report failed print": defaults, custom reasons, icons.
 
 Modelled on the maintenance types: default reasons can be hidden (and restored),
 custom reasons can be added, edited and deleted. Reports only store a reason's
@@ -64,7 +64,10 @@ class InvalidIconImage(Exception):
 
 
 async def ensure_default_reasons(db: AsyncSession) -> None:
-    """Create any missing default reason (first start, or after an upgrade)."""
+    """Create any missing default reason (first start, or after an upgrade).
+
+    Called once at startup from ``init_db`` (``seed_custom_failure_reasons``).
+    """
     existing = {reason.code: reason for reason in (await db.execute(select(CustomFailureReason))).scalars().all()}
     missing = [r for r in DEFAULT_REASONS if r["code"] not in existing]
     if not missing:
@@ -96,7 +99,6 @@ async def ensure_default_reasons(db: AsyncSession) -> None:
 
 
 async def list_reasons(db: AsyncSession, include_hidden: bool = False) -> list[CustomFailureReason]:
-    await ensure_default_reasons(db)
     query = select(CustomFailureReason).order_by(CustomFailureReason.sort_order, CustomFailureReason.id)
     if not include_hidden:
         query = query.where(CustomFailureReason.is_hidden.is_(False))
@@ -110,12 +112,10 @@ async def get_reason(db: AsyncSession, reason_id: int) -> CustomFailureReason | 
 
 
 async def get_reason_by_code(db: AsyncSession, code: str) -> CustomFailureReason | None:
-    await ensure_default_reasons(db)
     return (await db.execute(select(CustomFailureReason).where(CustomFailureReason.code == code))).scalar_one_or_none()
 
 
 async def create_reason(db: AsyncSession, title: str, subtitle: str | None, icon: str | None) -> CustomFailureReason:
-    await ensure_default_reasons(db)
     count = (await db.execute(select(func.count(CustomFailureReason.id)))).scalar_one()
     if count >= MAX_REASONS:
         raise ReasonLimitReached()
@@ -160,7 +160,7 @@ async def remove_reason(db: AsyncSession, reason: CustomFailureReason) -> str:
 
 
 async def restore_defaults(db: AsyncSession) -> int:
-    """Show hidden default reasons again. Returns how many were restored."""
+    """Show hidden default reasons again (and re-create missing ones). Returns how many were restored."""
     await ensure_default_reasons(db)
     hidden = (
         (

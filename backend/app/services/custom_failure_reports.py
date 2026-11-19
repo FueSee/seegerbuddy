@@ -1,4 +1,4 @@
-"""User-reported failure reasons ("Fehldruck melden") and their statistics.
+"""User-reported failure reasons ("Report failed print") and their statistics.
 
 Kept apart from the automatic failure_reason on archives / print log entries:
 this module only reads PrintArchive and never writes to it.
@@ -21,8 +21,8 @@ LATEST_ENTRIES_PER_REASON = 15
 ACTIVE_PRINTER_STATES = {"RUNNING", "PAUSE"}
 
 # Statistics filter: who decided the reason.
-#   "person"    - reported via "Fehldruck melden" or picked in PrintBuddy's Edit Archive dialog
-#   "automatic" - derived from what the printer / PrintBuddy recorded, not confirmed by anyone
+#   "person"    - reported via "Report failed print" or picked in Printbuddy's Edit Archive dialog
+#   "automatic" - derived from what the printer / Printbuddy recorded, not confirmed by anyone
 PERSON_SOURCES = ("manual", "imported")
 AUTOMATIC_SOURCES = ("auto",)
 
@@ -155,6 +155,43 @@ async def list_reports(
     ]
 
 
+async def latest_reports_per_reason(
+    db: AsyncSession,
+    limit: int,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    source: str | None = None,
+    printer_id: int | None = None,
+) -> dict[str, list[dict]]:
+    """The newest ``limit`` reports of every reason in ONE query (window function, SQLite >= 3.25 and PostgreSQL)."""
+    position = (
+        func.row_number()
+        .over(
+            partition_by=CustomFailureReport.custom_failure_reason,
+            order_by=(_print_date_column().desc(), CustomFailureReport.id.desc()),
+        )
+        .label("position")
+    )
+    ranked = (
+        select(CustomFailureReport.id.label("report_id"), position)
+        .where(*_date_filters(date_from, date_to, source, printer_id))
+        .subquery()
+    )
+    result = await db.execute(
+        select(CustomFailureReport, PrintArchive.thumbnail_path, PrintArchive.deleted_at)
+        .join(ranked, ranked.c.report_id == CustomFailureReport.id)
+        .outerjoin(PrintArchive, PrintArchive.id == CustomFailureReport.archive_id)
+        .where(ranked.c.position <= limit)
+        .order_by(_print_date_column().desc(), CustomFailureReport.id.desc())
+    )
+    latest: dict[str, list[dict]] = {}
+    for report, thumbnail_path, deleted_at in result.all():
+        latest.setdefault(report.custom_failure_reason, []).append(
+            report_to_dict(report, has_thumbnail=bool(thumbnail_path) and deleted_at is None)
+        )
+    return latest
+
+
 def report_to_dict(report: CustomFailureReport, has_thumbnail: bool = False) -> dict:
     return {
         "id": report.id,
@@ -210,10 +247,18 @@ async def reason_statistics(
         )
     ).scalar_one()
 
-    configured = [reason.code for reason in await list_reasons(db, include_hidden=True)]
-    visible = {reason.code for reason in await list_reasons(db)}
+    all_reasons = await list_reasons(db, include_hidden=True)
+    configured = [reason.code for reason in all_reasons]
+    visible = {reason.code for reason in all_reasons if not reason.is_hidden}
     codes = [code for code in configured if code in visible or code in counts]
     codes += sorted(code for code in counts if code not in configured)
+    latest = (
+        await latest_reports_per_reason(
+            db, LATEST_ENTRIES_PER_REASON, date_from=date_from, date_to=date_to, source=source, printer_id=printer_id
+        )
+        if total
+        else {}
+    )
     reasons = []
     for code in codes:
         count = counts.get(code, 0)
@@ -222,19 +267,7 @@ async def reason_statistics(
                 "reason": code,
                 "count": count,
                 "percent": round(count / total * 100, 1) if total else 0.0,
-                "latest": (
-                    await list_reports(
-                        db,
-                        reason=code,
-                        date_from=date_from,
-                        date_to=date_to,
-                        limit=LATEST_ENTRIES_PER_REASON,
-                        source=source,
-                        printer_id=printer_id,
-                    )
-                    if count
-                    else []
-                ),
+                "latest": latest.get(code, []),
             }
         )
     # Most frequent first; ties keep the configured order.

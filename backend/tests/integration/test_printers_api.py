@@ -7,6 +7,7 @@ from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import unquote
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from PIL import Image
@@ -604,6 +605,42 @@ class TestPrintersAPI:
         assert result["temperatures"]["nozzle"] == 211.0
         assert result["temperatures"]["bed"] == 59.0
         assert result["hms_errors"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_get_moonraker_printer_status_returns_generic_tool_slots(
+        self, async_client: AsyncClient, printer_factory
+    ):
+        """Multi-tool Klipper slots must survive the REST fallback poll, not only WebSocket pushes."""
+        from backend.app.services.printer_providers.moonraker import MoonrakerPrinterState
+
+        printer = await printer_factory(
+            provider="klipper",
+            model="WonderMaker ZR_ULTRA",
+            api_url="http://zr-ultra.local:7125",
+            serial_number="KLIPPER-ZR-ULTRA",
+        )
+        tool_slots = [
+            {
+                "id": index,
+                "extruder": "extruder" if index == 0 else f"extruder{index}",
+                "nozzle_diameter": "0.4",
+                "active": index == 0,
+                "filament_present": index < 2,
+                "docked": index >= 2,
+                "path_present": None,
+            }
+            for index in range(4)
+        ]
+        state = MoonrakerPrinterState(connected=True, state="IDLE", raw_data={"tool_slots": tool_slots})
+
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_status = MagicMock(return_value=state)
+            mock_pm.is_awaiting_plate_clear = MagicMock(return_value=False)
+            response = await async_client.get(f"/api/v1/printers/{printer.id}/status")
+
+        assert response.status_code == 200
+        assert response.json()["tool_slots"] == tool_slots
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -1365,6 +1402,52 @@ class TestAMSLoadUnloadAPI:
 
 class TestConfigureAMSSlotAPI:
     """Integration tests for AMS slot configure endpoint — tray_info_idx resolution."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_snapmaker_u1_configure_returns_capability_error_without_bambu_command(
+        self, async_client: AsyncClient, printer_factory
+    ):
+        """U1 slot state is printer-owned and must never reach Bambu MQTT methods."""
+        printer = await printer_factory(name="Snapmaker U1", provider="moonraker", model="Snapmaker U1")
+        client = MagicMock()
+
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = None
+            mock_pm.get_status.return_value = None
+            response = await async_client.post(
+                f"/api/v1/printers/{printer.id}/slots/0/0/configure",
+                params={
+                    "tray_info_idx": "GFL99",
+                    "tray_type": "PLA",
+                    "tray_sub_brands": "PLA Basic",
+                    "tray_color": "FF0000FF",
+                    "nozzle_temp_min": 190,
+                    "nozzle_temp_max": 230,
+                },
+            )
+
+        assert response.status_code == 409
+        assert "snapmaker" in response.json()["detail"].lower()
+        client.ams_set_filament_setting.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_snapmaker_u1_reset_returns_capability_error_without_bambu_command(
+        self, async_client: AsyncClient, printer_factory
+    ):
+        """Reset Slot is a Bambu AMS operation and is unavailable on the U1."""
+        printer = await printer_factory(name="Snapmaker U1", provider="moonraker", model="Snapmaker U1")
+        client = MagicMock()
+
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = None
+            mock_pm.get_status.return_value = None
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/ams/0/tray/0/reset")
+
+        assert response.status_code == 409
+        assert "snapmaker" in response.json()["detail"].lower()
+        client.reset_ams_slot.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -3438,3 +3521,71 @@ class TestPrinterCustomImage:
             deleted = await async_client.delete(f"/api/v1/printers/{printer.id}")
         assert deleted.status_code == 200
         assert not (self.images_dir / filename).exists()
+
+
+class TestPrintControlStateErrors:
+    """Print control routes report printer-state conflicts as 409, not 500."""
+
+    @staticmethod
+    def _client(method: str, state: str, *, result=False, error=None) -> MagicMock:
+        client = MagicMock()
+        client.state.state = state
+        if error is not None:
+            getattr(client, method).side_effect = error
+        else:
+            getattr(client, method).return_value = result
+        return client
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        ("action", "method", "state"),
+        [
+            ("pause", "pause_print", "IDLE"),
+            ("pause", "pause_print", "FINISH"),
+            ("resume", "resume_print", "RUNNING"),
+            ("resume", "resume_print", "IDLE"),
+        ],
+    )
+    async def test_invalid_state_returns_409_with_state(
+        self, async_client: AsyncClient, printer_factory, action, method, state
+    ):
+        printer = await printer_factory(name="State Printer")
+        mock_client = self._client(method, state)
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = mock_client
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/print/{action}")
+        assert response.status_code == 409
+        assert state in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        ("action", "method"), [("pause", "pause_print"), ("resume", "resume_print"), ("stop", "stop_print")]
+    )
+    async def test_provider_rejection_returns_409(self, async_client: AsyncClient, printer_factory, action, method):
+        printer = await printer_factory(name="Rejecting Printer")
+        request = httpx.Request("POST", "http://klipper.local:7125/printer/print/x")
+        error = httpx.HTTPStatusError("400", request=request, response=httpx.Response(400, request=request))
+        mock_client = self._client(method, "RUNNING", error=error)
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = mock_client
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/print/{action}")
+        assert response.status_code == 409
+        assert "RUNNING" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        ("action", "method", "state"),
+        [("pause", "pause_print", "RUNNING"), ("resume", "resume_print", "PAUSE"), ("stop", "stop_print", "RUNNING")],
+    )
+    async def test_failure_in_valid_state_stays_500(
+        self, async_client: AsyncClient, printer_factory, action, method, state
+    ):
+        printer = await printer_factory(name="Broken Printer")
+        mock_client = self._client(method, state)
+        with patch("backend.app.api.routes.printers.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = mock_client
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/print/{action}")
+        assert response.status_code == 500

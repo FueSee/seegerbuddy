@@ -204,7 +204,8 @@ describe('reason settings (cog)', () => {
     await waitFor(() =>
       expect(created).toEqual({ title: 'Head crash', subtitle: 'Collision, nozzle torn off', icon: 'Zap' })
     );
-  });
+    // Typing into the form with ~50 icon buttons can exceed the default 5 s on a busy CI runner.
+  }, 10000);
 
   it('uploads an own image as icon when saving', async () => {
     useTarget();
@@ -342,7 +343,7 @@ describe('Failure history import', () => {
     renderModal();
 
     expect(await screen.findByText(/Detected automatically: Layer shift/)).toBeInTheDocument();
-    expect(screen.getByText('PrintBuddy had recorded: “Layer shift”')).toBeInTheDocument();
+    expect(screen.getByText('Printbuddy had recorded: “Layer shift”')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Confirm reason' })).toBeEnabled();
   });
 

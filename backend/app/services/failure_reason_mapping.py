@@ -1,13 +1,13 @@
-"""Translate PrintBuddy's existing failure information into "Fehldruck melden" reason codes.
+"""Translate Printbuddy's existing failure information into "Report failed print" reason codes.
 
-Two kinds of input exist in PrintBuddy:
+Two kinds of input exist in Printbuddy:
 
 * ``failure_reason`` text on print log entries / archives. It is either written
   automatically ("Layer shift", "Filament runout", "Clogged nozzle",
   "User cancelled", "Stale - ...") or picked by a person in the Edit Archive
   dialog, which stores the *translated* label of the language that was active.
   ``reason_for_text`` maps every known label in all languages.
-* Bambu HMS error codes ("0300_4006"). ``reason_for_hms`` maps them. PrintBuddy
+* Bambu HMS error codes ("0300_4006"). ``reason_for_hms`` maps them. Printbuddy
   does not keep the HMS code of a finished print, so this is used for the
   printer's live errors (pop-up suggestion) and for queue items whose
   error_message carries the codes.
@@ -47,7 +47,7 @@ SKIP = "skip"
 # ---------------------------------------------------------------------------
 
 # Labels of the Edit Archive dialog (editArchive.failureReasons.*) in every
-# language PrintBuddy ships, plus the texts PrintBuddy writes automatically.
+# language Printbuddy ships, plus the texts Printbuddy writes automatically.
 _TEXT_LABELS: dict[str, tuple[str, ...]] = {
     # adhesionFailure
     R02_WARPING: (
@@ -167,7 +167,7 @@ _TEXT_LABELS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Texts PrintBuddy writes by itself (as opposed to a person picking a label).
+# Texts Printbuddy writes by itself (as opposed to a person picking a label).
 AUTOMATIC_TEXTS = {"Layer shift", "Filament runout", "Clogged nozzle", "User cancelled"}
 
 _TEXT_TO_REASON: dict[str, str] = {
@@ -197,7 +197,7 @@ def is_automatic_text(text: str | None) -> bool:
 # Keys are normalised codes (see _normalise_hms): AMS units, AMS-HT units and
 # AMS lite slots share one entry; "AMS" = 07xx/18xx unit, "AMSX" = external
 # spool / extruder variant (07FE, 07FF, 18FE, 18FF), "LITE" = 1200-1203,
-# "LITEX" = 12FF. Every code PrintBuddy knows is listed, SKIP included, so the
+# "LITEX" = 12FF. Every code Printbuddy knows is listed, SKIP included, so the
 # review sheet shows a decision for each one.
 
 _S = SKIP

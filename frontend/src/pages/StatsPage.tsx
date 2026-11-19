@@ -1149,7 +1149,7 @@ export function StatsPage() {
       defaultSize: 4,
     },
     {
-      // User-reported reasons ("Fehldruck melden"); independent of 'failure-analysis'
+      // User-reported reasons ("Report failed print"); independent of 'failure-analysis'
       id: 'fail-reason-statistics',
       title: t('customFailure.widget.title'),
       component: <FailReasonStatisticsWidget dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,

@@ -20,7 +20,7 @@ interface FailureReasonSettingsProps {
 }
 
 /**
- * The cog view of "Fehldruck melden": hide/restore default reasons, add, edit,
+ * The cog view of "Report failed print": hide/restore default reasons, add, edit,
  * re-order and delete custom reasons, pick a built-in icon or upload an image.
  * Modelled on the maintenance types.
  */

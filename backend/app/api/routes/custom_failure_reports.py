@@ -1,4 +1,4 @@
-"""Endpoints for user-reported failure reasons ("Fehldruck melden").
+"""Endpoints for user-reported failure reasons ("Report failed print").
 
 Separate from the automatic failure_reason / Failure Analysis widget; see
 backend/app/services/custom_failure_reports.py.
@@ -28,7 +28,7 @@ from backend.app.services.custom_failure_reports import (
     reason_statistics,
     report_to_dict,
 )
-from backend.app.services.failure_history_import import SOURCE_MANUAL, sync_failure_history
+from backend.app.services.failure_history_import import SOURCE_MANUAL
 from backend.app.services.failure_progress import progress_by_run
 from backend.app.services.failure_reason_mapping import SKIP, hms_short_code, reason_for_hms_list
 from backend.app.services.hms_errors import get_error_description
@@ -197,7 +197,6 @@ async def get_report_target(
 ):
     """Which print a report would flag: the running print, otherwise the most recent one."""
     printer = await _get_printer(db, printer_id)
-    await sync_failure_history(db)
     state = _printer_state(printer_id)
     archive = await find_target_archive(db, printer_id, state)
     if not archive:
@@ -223,7 +222,7 @@ async def get_report_target(
 @router.post("/", response_model=CustomFailureReportResponse)
 async def create_report(
     data: CustomFailureReportCreate,
-    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db),
 ):
     """Flag a print run with a reason. Reporting the same run again updates its report."""
@@ -258,7 +257,7 @@ async def create_report(
 async def update_report(
     report_id: int,
     data: CustomFailureReportUpdate,
-    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db),
 ):
     """Change the reason, comment or name of an existing report."""
@@ -283,12 +282,12 @@ async def update_report(
 @router.delete("/{report_id}")
 async def delete_report(
     report_id: int,
-    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+    _=RequirePermissionIfAuthEnabled(Permission.ARCHIVES_DELETE_ALL),
     db: AsyncSession = Depends(get_db),
 ):
     """Withdraw a report (e.g. flagged by mistake).
 
-    Reports linked to PrintBuddy's print log are kept as an invisible marker, so the
+    Reports linked to Printbuddy's print log are kept as an invisible marker, so the
     history import doesn't bring them back.
     """
     report = await _get_active_report(db, report_id)
@@ -310,7 +309,6 @@ async def get_statistics(
     db: AsyncSession = Depends(get_db),
 ):
     """Per-reason counts and shares with the latest prints for "Fail reason statistics"."""
-    await sync_failure_history(db)
     return await reason_statistics(db, date_from=date_from, date_to=date_to, source=source, printer_id=printer_id)
 
 
@@ -325,7 +323,6 @@ async def get_reports(
     db: AsyncSession = Depends(get_db),
 ):
     """All reports (optionally for one reason), newest print first — used by "show all"."""
-    await sync_failure_history(db)
     return await list_reports(
         db, reason=reason, date_from=date_from, date_to=date_to, source=source, printer_id=printer_id
     )

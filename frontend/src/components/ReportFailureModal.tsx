@@ -18,7 +18,7 @@ import {
 } from '../utils/customFailure';
 
 interface ReportFailureModalProps {
-  /** Report the printer's current or last print ("Fehldruck melden" button). */
+  /** Report the printer's current or last print ("Report failed print" button). */
   printer?: Pick<Printer, 'id' | 'name'>;
   /** Or: change / confirm an existing report (from the statistics). */
   report?: CustomFailureReport;
@@ -43,7 +43,7 @@ function useWindowWidth(): number {
 }
 
 /**
- * "Fehldruck melden": flag the printer's current (or most recent) print with a
+ * "Report failed print": flag the printer's current (or most recent) print with a
  * reason, picked from a grid of tiles. The cog opens the reason settings.
  * Separate from the automatic failure_reason on archives.
  */
@@ -52,6 +52,7 @@ export function ReportFailureModal({ printer, report, onClose }: ReportFailureMo
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
+  const canWithdraw = hasPermission('archives:delete_all');
   const canEditReasons = hasPermission('settings:update');
   const windowWidth = useWindowWidth();
   const [showSettings, setShowSettings] = useState(false);
@@ -365,7 +366,7 @@ export function ReportFailureModal({ printer, report, onClose }: ReportFailureMo
 
           {!showSettings && (
             <div className="flex flex-wrap gap-3 mt-6">
-              {existing && (
+              {existing && canWithdraw && (
                 <Button variant="danger" onClick={() => withdrawMutation.mutate()} disabled={busy}>
                   {t('customFailure.modal.withdraw')}
                 </Button>

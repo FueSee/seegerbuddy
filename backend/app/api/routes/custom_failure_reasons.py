@@ -1,4 +1,4 @@
-"""Endpoints for managing the selectable "Fehldruck melden" reasons.
+"""Endpoints for managing the selectable "Report failed print" reasons.
 
 Everyone who may report can read the reasons; changing them needs settings rights
 (no login = everyone). See backend/app/services/custom_failure_reasons.py.

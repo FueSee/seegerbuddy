@@ -1,4 +1,4 @@
-"""Integration tests for managing the "Fehldruck melden" reasons (defaults, custom, icons)."""
+"""Integration tests for managing the "Report failed print" reasons (defaults, custom, icons)."""
 
 import io
 from datetime import datetime
@@ -10,6 +10,14 @@ from PIL import Image
 from backend.app.core.config import settings
 
 API = "/api/v1/custom-failure-reports"
+
+
+@pytest.fixture(autouse=True)
+async def _seed_default_reasons(db_session):
+    """The app seeds the default reasons at startup (init_db), which the test client skips."""
+    from backend.app.services.custom_failure_reasons import ensure_default_reasons
+
+    await ensure_default_reasons(db_session)
 
 
 async def _report(client: AsyncClient, printer_id: int, archive_id: int, reason: str, **extra):

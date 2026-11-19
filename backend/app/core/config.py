@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 # Application version - single source of truth
-APP_VERSION = "0.2.5.4b1"
+APP_VERSION = "0.2.5.5b1"
 GITHUB_REPO = "vmhomelab/Printbuddy"
 
 # Seeger fork. In-app updates are disabled: they would install the upstream

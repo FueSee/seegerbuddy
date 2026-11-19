@@ -1,8 +1,8 @@
 """Remember how far a print got when it stopped or failed ("Stopped/Failed at" in the statistics).
 
-PrintBuddy doesn't store this for finished prints. ``record_run_progress`` is
-called once from PrintBuddy's print-complete handler and writes our own table;
-nothing of PrintBuddy's is changed. Older prints simply have no value.
+Printbuddy doesn't store this for finished prints. ``record_run_progress`` is
+called once from Printbuddy's print-complete handler and writes our own table;
+nothing of Printbuddy's is changed. Older prints simply have no value.
 """
 
 import logging
@@ -73,7 +73,7 @@ async def record_run_progress(db: AsyncSession, printer_id: int, archive_id: int
             )
         )
         await db.commit()
-    except Exception as exc:  # must never disturb PrintBuddy's own print-complete handling
+    except Exception as exc:  # must never disturb Printbuddy's own print-complete handling
         logger.warning("Could not record print progress for archive %s: %s", archive_id, exc)
 
 
